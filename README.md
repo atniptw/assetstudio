@@ -6,7 +6,17 @@ Check out the [original AssetStudio project](https://github.com/Perfare/AssetStu
 
 Note: Requires Internet connection to fetch asset_index jsons.
 
-**Unity Version Support**: Unity 2.x through Unity 6 (6000.x) including Unity 6000.0.58f2
+## Unity Version Support
+
+**Supported Versions**: Unity 2.x through Unity 6 (6000.0.58f2)
+
+### Unity 6 Support (Added November 2025)
+
+- Full support for Unity 6000.0.x series (Unity 6)
+- Version parsing handles new 6000.x.y format
+- Texture serialization updated for Unity 2023.2+ format changes (removed `m_ForcedFallbackFormat` and `m_DownscaleFallback` fields)
+- Bundle loading, asset enumeration, and texture decoding all functional
+- Known limitation: Some platform-specific texture compression formats may not decode correctly
 
 ---
 
