@@ -1,81 +1,68 @@
 name: Build and Release
 
 on:
-    push:
-        tags:
-            - "v*.*.*" # Triggers on version tags like v2.0.0, v2.1.0, etc.
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v2.0.0, v2.1.0, etc.
 
 jobs:
-    build:
-        runs-on: windows-latest
-
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-
-            - name: Setup .NET
-              uses: actions/setup-dotnet@v4
-              with:
-                  dotnet-version: |
-                      8.0.x
-                      10.0.x
-
-            - name: Restore dependencies
-              run: dotnet restore AssetStudio.sln
-
-            - name: Build CLI (net10.0-windows)
-              run: dotnet build AssetStudio.CLI/AssetStudio.CLI.csproj -c Release -f net10.0-windows --no-restore
-
-            - name: Build GUI (net10.0-windows)
-              run: dotnet build AssetStudio.GUI/AssetStudio.GUI.csproj -c Release -f net10.0-windows --no-restore
-
-            - name: Prepare CLI Release
-              run: |
-                  mkdir release-cli
-                  Copy-Item -Path "AssetStudio.GUI/bin/Release/net10.0-windows/AssetStudio.CLI.dll" -Destination "release-cli/"
-                  Copy-Item -Path "AssetStudio.GUI/bin/Release/net10.0-windows/AssetStudio.CLI.exe" -Destination "release-cli/"
-                  Copy-Item -Path "AssetStudio.GUI/bin/Release/net10.0-windows/AssetStudio.CLI.runtimeconfig.json" -Destination "release-cli/"
-                  Copy-Item -Path "AssetStudio.GUI/bin/Release/net10.0-windows/*.dll" -Destination "release-cli/" -Exclude "AssetStudio.GUI.dll"
-                  Compress-Archive -Path "release-cli/*" -DestinationPath "AssetStudioCLI-net10.0-win.zip"
-              shell: pwsh
-
-            - name: Prepare GUI Release
-              run: |
-                  mkdir release-gui
-                  Copy-Item -Path "AssetStudio.GUI/bin/Release/net10.0-windows/*" -Destination "release-gui/" -Recurse -Exclude "*.pdb"
-                  Compress-Archive -Path "release-gui/*" -DestinationPath "AssetStudioGUI-net10.0-win.zip"
-              shell: pwsh
-
-            - name: Create Release
-              uses: softprops/action-gh-release@v1
-              with:
-                  files: |
-                      AssetStudioCLI-net10.0-win.zip
-                      AssetStudioGUI-net10.0-win.zip
-                  draft: false
-                  prerelease: false
-                  generate_release_notes: true
-                  body: |
-                      ## AssetStudio Release ${{ github.ref_name }}
-
-                      ### What's Included
-                      - **AssetStudioCLI-net10.0-win.zip**: Command-line version for automated workflows
-                      - **AssetStudioGUI-net10.0-win.zip**: GUI version with visual interface
-
-                      ### Requirements
-                      - Windows OS
-                      - [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (Desktop Runtime for GUI)
-
-                      ### Unity Support
-                      - Unity 2.x through Unity 6 (6000.0 - 6000.4+)
-                      - Full texture decoding support including Unity 2023.2+ format changes
-
-                      ### Features
-                      - Extract and export Unity assets (textures, meshes, audio, etc.)
-                      - Multiple export formats for textures (PNG, JPEG, BMP, WebP)
-                      - FBX export for 3D models
-                      - Asset filtering and batch processing
-
-                      See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for usage instructions.
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+    
+    - name: Restore dependencies
+      run: dotnet restore AssetStudio.sln
+      
+    - name: Build Solution (net10.0-windows)
+      run: dotnet build AssetStudio.GUI/AssetStudio.GUI.csproj -c Release -f net10.0-windows --no-restore
+      
+    - name: Prepare Release Package
+      run: |
+        mkdir release
+        Copy-Item -Path "AssetStudio.GUI/bin/Release/net10.0-windows/*" -Destination "release/" -Recurse -Exclude "*.pdb"
+        Compress-Archive -Path "release/*" -DestinationPath "AssetStudio-net10.0-win.zip"
+      shell: pwsh
+      
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          AssetStudio-net10.0-win.zip
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        body: |
+          ## AssetStudio Release ${{ github.ref_name }}
+          
+          ### What's Included
+          Complete package with both CLI and GUI executables:
+          - **AssetStudio.GUI.exe**: Visual interface for interactive use
+          - **AssetStudio.CLI.exe**: Command-line tool for automation and batch processing
+          
+          ### Requirements
+          - Windows OS
+          - [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) (Desktop Runtime)
+          
+          ### Unity Support
+          - Unity 2.x through Unity 6 (6000.0 - 6000.4+)
+          - Full texture decoding support including Unity 2023.2+ format changes
+          
+          ### Features
+          - Extract and export Unity assets (textures, meshes, audio, etc.)
+          - Multiple export formats for textures (PNG, JPEG, BMP, WebP)
+          - FBX export for 3D models
+          - Asset filtering and batch processing
+          
+          See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for usage instructions.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

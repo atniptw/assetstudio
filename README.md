@@ -6,10 +6,11 @@ A Unity asset extraction tool supporting Unity 2.x through Unity 6.
 
 ## Download
 
-Get the latest compiled releases from the [Releases](https://github.com/Razviar/assetstudio/releases) page:
+Get the latest compiled releases from the [Releases](https://github.com/Razviar/assetstudio/releases) page.
 
-- **AssetStudioGUI**: Graphical interface version
-- **AssetStudioCLI**: Command-line version for automation
+The release package contains both:
+- **AssetStudio.GUI.exe**: Graphical interface version
+- **AssetStudio.CLI.exe**: Command-line version for automation
 
 ## Project History
 
