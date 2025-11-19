@@ -10,6 +10,8 @@ namespace AssetStudio
         [JsonIgnore]
         public ObjectReader reader;
         [JsonIgnore]
+        private readonly object readerLock = new object();
+        [JsonIgnore]
         public long m_PathID;
         [JsonIgnore]
         public int[] version;
@@ -51,7 +53,10 @@ namespace AssetStudio
         {
             if (serializedType?.m_Type != null)
             {
-                return TypeTreeHelper.ReadTypeString(serializedType.m_Type, reader);
+                lock (readerLock)
+                {
+                    return TypeTreeHelper.ReadTypeString(serializedType.m_Type, reader);
+                }
             }
             return null;
         }
@@ -60,7 +65,10 @@ namespace AssetStudio
         {
             if (m_Type != null)
             {
-                return TypeTreeHelper.ReadTypeString(m_Type, reader);
+                lock (readerLock)
+                {
+                    return TypeTreeHelper.ReadTypeString(m_Type, reader);
+                }
             }
             return null;
         }
@@ -69,7 +77,10 @@ namespace AssetStudio
         {
             if (serializedType?.m_Type != null)
             {
-                return TypeTreeHelper.ReadType(serializedType.m_Type, reader);
+                lock (readerLock)
+                {
+                    return TypeTreeHelper.ReadType(serializedType.m_Type, reader);
+                }
             }
             return null;
         }
@@ -78,7 +89,10 @@ namespace AssetStudio
         {
             if (m_Type != null)
             {
-                return TypeTreeHelper.ReadType(m_Type, reader);
+                lock (readerLock)
+                {
+                    return TypeTreeHelper.ReadType(m_Type, reader);
+                }
             }
             return null;
         }

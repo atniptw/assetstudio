@@ -10,6 +10,7 @@ namespace AssetStudio
         private long offset;
         private long size;
         private BinaryReader reader;
+        private readonly object readerLock = new object();
 
         public int Size { get => (int)size; }
 
@@ -66,25 +67,34 @@ namespace AssetStudio
 
         public byte[] GetData()
         {
-            var binaryReader = GetReader();
-            binaryReader.BaseStream.Position = offset;
-            return binaryReader.ReadBytes((int)size);
+            lock (readerLock)
+            {
+                var binaryReader = GetReader();
+                binaryReader.BaseStream.Position = offset;
+                return binaryReader.ReadBytes((int)size);
+            }
         }
 
         public void GetData(byte[] buff)
         {
-            var binaryReader = GetReader();
-            binaryReader.BaseStream.Position = offset;
-            binaryReader.Read(buff, 0, (int)size);
+            lock (readerLock)
+            {
+                var binaryReader = GetReader();
+                binaryReader.BaseStream.Position = offset;
+                binaryReader.Read(buff, 0, (int)size);
+            }
         }
 
         public void WriteData(string path)
         {
-            var binaryReader = GetReader();
-            binaryReader.BaseStream.Position = offset;
-            using (var writer = File.OpenWrite(path))
+            lock (readerLock)
             {
-                binaryReader.BaseStream.CopyTo(writer, size);
+                var binaryReader = GetReader();
+                binaryReader.BaseStream.Position = offset;
+                using (var writer = File.OpenWrite(path))
+                {
+                    binaryReader.BaseStream.CopyTo(writer, size);
+                }
             }
         }
     }
