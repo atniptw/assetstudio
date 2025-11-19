@@ -1,13 +1,11 @@
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
@@ -30,18 +28,13 @@ namespace AssetStudio
         public CancellationTokenSource tokenSource = new CancellationTokenSource();
         public List<SerializedFile> assetsFileList = new List<SerializedFile>();
 
-        private readonly object assetsFileListLock = new object();
-        private readonly object importFilesLock = new object();
-        private readonly object versionPromptLock = new object();
-        private bool versionPrompted = false;
-
         internal Dictionary<string, int> assetsFileIndexCache = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        internal ConcurrentDictionary<string, BinaryReader> resourceFileReaders = new ConcurrentDictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);
+        internal Dictionary<string, BinaryReader> resourceFileReaders = new Dictionary<string, BinaryReader>(StringComparer.OrdinalIgnoreCase);
 
         internal List<string> importFiles = new List<string>();
-        internal ConcurrentDictionary<string, byte> importFilesHash = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        internal ConcurrentDictionary<string, byte> noexistFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        internal ConcurrentDictionary<string, byte> assetsFileListHash = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string> importFilesHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string> noexistFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string> assetsFileListHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public void LoadFiles(params string[] files)
         {
@@ -91,53 +84,20 @@ namespace AssetStudio
             {
                 Logger.Verbose($"caching {file} path and name to filter out duplicates");
                 importFiles.Add(file);
-                importFilesHash.TryAdd(Path.GetFileName(file), 0);
+                importFilesHash.Add(Path.GetFileName(file));
             }
 
             Progress.Reset();
-
-            // Process files in parallel batches to handle dynamic dependency discovery
-            int processedCount = 0;
-            int progressCounter = 0;
-
-            while (processedCount < importFiles.Count)
+            //use a for loop because list size can change
+            for (var i = 0; i < importFiles.Count; i++)
             {
+                LoadFile(importFiles[i]);
+                Progress.Report(i + 1, importFiles.Count);
                 if (tokenSource.IsCancellationRequested)
                 {
                     Logger.Info("Loading files has been aborted !!");
                     break;
                 }
-
-                // Snapshot the current batch size
-                int currentBatchEnd;
-                lock (importFilesLock)
-                {
-                    currentBatchEnd = importFiles.Count;
-                }
-
-                // Process current batch in parallel
-                var parallelOptions = new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = Environment.ProcessorCount,
-                    CancellationToken = tokenSource.Token
-                };
-
-                try
-                {
-                    Parallel.For(processedCount, currentBatchEnd, parallelOptions, i =>
-                    {
-                        LoadFile(importFiles[i]);
-                        var current = Interlocked.Increment(ref progressCounter);
-                        Progress.Report(current, importFiles.Count);
-                    });
-                }
-                catch (OperationCanceledException)
-                {
-                    Logger.Info("Loading files has been aborted !!");
-                    break;
-                }
-
-                processedCount = currentBatchEnd;
             }
 
             importFiles.Clear();
@@ -196,28 +156,25 @@ namespace AssetStudio
 
         private void LoadAssetsFile(FileReader reader)
         {
-            if (!assetsFileListHash.ContainsKey(reader.FileName))
+            if (!assetsFileListHash.Contains(reader.FileName))
             {
                 Logger.Info($"Loading {reader.FullPath}");
                 try
                 {
                     var assetsFile = new SerializedFile(reader, this);
                     CheckStrippedVersion(assetsFile);
-                    lock (assetsFileListLock)
-                    {
-                        assetsFileList.Add(assetsFile);
-                    }
-                    assetsFileListHash.TryAdd(assetsFile.fileName, 0);
+                    assetsFileList.Add(assetsFile);
+                    assetsFileListHash.Add(assetsFile.fileName);
 
                     foreach (var sharedFile in assetsFile.m_Externals)
                     {
                         Logger.Verbose($"{assetsFile.fileName} needs external file {sharedFile.fileName}, attempting to look it up...");
                         var sharedFileName = sharedFile.fileName;
 
-                        if (!importFilesHash.ContainsKey(sharedFileName))
+                        if (!importFilesHash.Contains(sharedFileName))
                         {
                             var sharedFilePath = Path.Combine(Path.GetDirectoryName(reader.FullPath), sharedFileName);
-                            if (!noexistFiles.ContainsKey(sharedFilePath))
+                            if (!noexistFiles.Contains(sharedFilePath))
                             {
                                 if (!File.Exists(sharedFilePath))
                                 {
@@ -230,16 +187,13 @@ namespace AssetStudio
                                 }
                                 if (File.Exists(sharedFilePath))
                                 {
-                                    lock (importFilesLock)
-                                    {
-                                        importFiles.Add(sharedFilePath);
-                                    }
-                                    importFilesHash.TryAdd(sharedFileName, 0);
+                                    importFiles.Add(sharedFilePath);
+                                    importFilesHash.Add(sharedFileName);
                                 }
                                 else
                                 {
                                     Logger.Verbose("Nothing was found, caching into non existant files to avoid repeated searching !!");
-                                    noexistFiles.TryAdd(sharedFilePath, 0);
+                                    noexistFiles.Add(sharedFilePath);
                                 }
                             }
                         }
@@ -261,7 +215,7 @@ namespace AssetStudio
         private void LoadAssetsFromMemory(FileReader reader, string originalPath, string unityVersion = null, long originalOffset = 0)
         {
             Logger.Verbose($"Loading asset file {reader.FileName} with version {unityVersion} from {originalPath} at offset 0x{originalOffset:X8}");
-            if (!assetsFileListHash.ContainsKey(reader.FileName))
+            if (!assetsFileListHash.Contains(reader.FileName))
             {
                 try
                 {
@@ -273,11 +227,8 @@ namespace AssetStudio
                         assetsFile.SetVersion(unityVersion);
                     }
                     CheckStrippedVersion(assetsFile);
-                    lock (assetsFileListLock)
-                    {
-                        assetsFileList.Add(assetsFile);
-                    }
-                    assetsFileListHash.TryAdd(assetsFile.fileName, 0);
+                    assetsFileList.Add(assetsFile);
+                    assetsFileListHash.Add(assetsFile.fileName);
                 }
                 catch (Exception e)
                 {
@@ -388,12 +339,12 @@ namespace AssetStudio
                             if (!splitFiles.Contains(basePath))
                             {
                                 splitFiles.Add(basePath);
-                                importFilesHash.TryAdd(baseName, 0);
+                                importFilesHash.Add(baseName);
                             }
                         }
                         else
                         {
-                            importFilesHash.TryAdd(entry.Name, 0);
+                            importFilesHash.Add(entry.Name);
                         }
                     }
 
@@ -628,37 +579,18 @@ namespace AssetStudio
         {
             if (assetsFile.IsVersionStripped && string.IsNullOrEmpty(SpecifyUnityVersion))
             {
-                // Thread-safe version prompting - only prompt once even with parallel loading
-                lock (versionPromptLock)
+                // Try to prompt user for version if event is subscribed
+                if (OnVersionPrompt != null)
                 {
-                    // Check again after acquiring lock in case another thread already prompted
-                    if (!string.IsNullOrEmpty(SpecifyUnityVersion))
+                    var eventArgs = new VersionPromptEventArgs
                     {
-                        assetsFile.SetVersion(SpecifyUnityVersion);
-                        return;
-                    }
+                        FileName = assetsFile.fileName
+                    };
+                    OnVersionPrompt(this, eventArgs);
 
-                    // Only prompt once
-                    if (!versionPrompted && OnVersionPrompt != null)
+                    if (!eventArgs.Cancelled && !string.IsNullOrEmpty(eventArgs.UserProvidedVersion))
                     {
-                        versionPrompted = true;
-                        var eventArgs = new VersionPromptEventArgs
-                        {
-                            FileName = assetsFile.fileName
-                        };
-                        OnVersionPrompt(this, eventArgs);
-
-                        if (!eventArgs.Cancelled && !string.IsNullOrEmpty(eventArgs.UserProvidedVersion))
-                        {
-                            SpecifyUnityVersion = eventArgs.UserProvidedVersion;
-                            assetsFile.SetVersion(eventArgs.UserProvidedVersion);
-                            return;
-                        }
-                    }
-                    else if (!string.IsNullOrEmpty(SpecifyUnityVersion))
-                    {
-                        // Another thread already got the version
-                        assetsFile.SetVersion(SpecifyUnityVersion);
+                        assetsFile.SetVersion(eventArgs.UserProvidedVersion);
                         return;
                     }
                 }
@@ -689,12 +621,6 @@ namespace AssetStudio
             resourceFileReaders.Clear();
 
             assetsFileIndexCache.Clear();
-
-            // Reset version prompt flag for next load
-            lock (versionPromptLock)
-            {
-                versionPrompted = false;
-            }
 
             tokenSource.Dispose();
             tokenSource = new CancellationTokenSource();

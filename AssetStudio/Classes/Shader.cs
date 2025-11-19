@@ -608,7 +608,7 @@ namespace AssetStudio
         public SerializedSubProgram(ObjectReader reader)
         {
             var version = reader.version;
-            
+
             if (reader.Game.Type.IsLoveAndDeepspace())
             {
                 var m_CodeHash = new Hash128(reader);
@@ -1081,6 +1081,20 @@ namespace AssetStudio
 
         public Shader(ObjectReader reader) : base(reader)
         {
+            // Unity 6000+ has format changes that break manual parsing
+            // Skip shader parsing entirely - we don't need it for texture extraction
+            if (version[0] >= 6000)
+            {
+                Logger.Verbose($"Skipping Shader manual parsing for Unity {version[0]}.{version[1]} (use TypeTree dump if needed)");
+                // Read remaining bytes to advance stream position correctly
+                var remaining = reader.byteSize - (reader.Position - reader.byteStart);
+                if (remaining > 0)
+                {
+                    reader.ReadBytes((int)remaining);
+                }
+                return;
+            }
+
             if (version[0] == 5 && version[1] >= 5 || version[0] > 5) //5.5 and up
             {
                 m_ParsedForm = new SerializedShader(reader);

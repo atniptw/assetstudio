@@ -158,13 +158,8 @@ namespace AssetStudio
             {
                 var stringData = ReadBytes(length);
                 result = Encoding.UTF8.GetString(stringData);
-                AlignStream();
             }
-            else if (length > 0)
-            {
-                // String length exceeds remaining bytes - this shouldn't happen with correct data
-                Logger.Warning($"String length {length} exceeds remaining bytes {Remaining}, skipping");
-            }
+            AlignStream();
             return result;
         }
 
