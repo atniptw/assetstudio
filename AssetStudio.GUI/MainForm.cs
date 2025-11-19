@@ -91,6 +91,9 @@ namespace AssetStudio.GUI
             InitializeLogger();
             InitalizeOptions();
             FMODinit();
+
+            // Subscribe to version prompt event
+            assetsManager.OnVersionPrompt += AssetsManager_OnVersionPrompt;
         }
 
         private void InitializeExportOptions()
@@ -181,6 +184,96 @@ namespace AssetStudio.GUI
                 }
             }
         }
+
+        private void AssetsManager_OnVersionPrompt(object sender, VersionPromptEventArgs e)
+        {
+            // Invoke on UI thread if needed
+            if (InvokeRequired)
+            {
+                Invoke(new EventHandler<VersionPromptEventArgs>(AssetsManager_OnVersionPrompt), sender, e);
+                return;
+            }
+
+            using (var inputDialog = new Form())
+            {
+                inputDialog.Text = "Unity Version Required";
+                inputDialog.ClientSize = new Size(500, 280);
+                inputDialog.StartPosition = FormStartPosition.CenterParent;
+                inputDialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                inputDialog.MaximizeBox = false;
+                inputDialog.MinimizeBox = false;
+
+                var label = new Label
+                {
+                    Text = $"Unable to detect Unity version for:\n{e.FileName}\n\nPlease enter the Unity version:",
+                    Location = new Point(25, 20),
+                    Width = 450,
+                    Height = 80,
+                    AutoSize = false
+                };
+
+                var textBox = new TextBox
+                {
+                    Location = new Point(25, 105),
+                    Width = 450,
+                    Text = "2020.3.48f1"
+                };
+
+                var exampleLabel = new Label
+                {
+                    Text = "Example: 2020.3.48f1 or 6000.0.58f2",
+                    Location = new Point(25, 145),
+                    Width = 450,
+                    Height = 30,
+                    ForeColor = SystemColors.GrayText,
+                    AutoSize = false
+                };
+
+                var okButton = new Button
+                {
+                    Text = "OK",
+                    Location = new Point(280, 210),
+                    Width = 90,
+                    Height = 35,
+                    DialogResult = DialogResult.OK
+                };
+
+                var cancelButton = new Button
+                {
+                    Text = "Cancel",
+                    Location = new Point(385, 210),
+                    Width = 90,
+                    Height = 35,
+                    DialogResult = DialogResult.Cancel
+                };
+
+                inputDialog.Controls.Add(label);
+                inputDialog.Controls.Add(textBox);
+                inputDialog.Controls.Add(exampleLabel);
+                inputDialog.Controls.Add(okButton);
+                inputDialog.Controls.Add(cancelButton);
+                inputDialog.AcceptButton = okButton;
+                inputDialog.CancelButton = cancelButton;
+
+                var result = inputDialog.ShowDialog(this);
+
+                if (result == DialogResult.OK && !string.IsNullOrWhiteSpace(textBox.Text))
+                {
+                    var version = textBox.Text.Trim();
+                    e.UserProvidedVersion = version;
+                    e.Cancelled = false;
+
+                    // Set the version globally so it applies to all subsequent files
+                    assetsManager.SpecifyUnityVersion = version;
+                    specifyUnityVersion.Text = version;
+                }
+                else
+                {
+                    e.Cancelled = true;
+                }
+            }
+        }
+
         private void MainForm_DragEnter(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
@@ -1459,7 +1552,7 @@ namespace AssetStudio.GUI
         {
             if (InvokeRequired)
             {
-                
+
                 var result = BeginInvoke(new Action(() => { progressBar1.Value = value; }));
                 result.AsyncWaitHandle.WaitOne();
             }

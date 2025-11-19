@@ -10,12 +10,20 @@ using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
 {
+    public class VersionPromptEventArgs : EventArgs
+    {
+        public string FileName { get; set; }
+        public string UserProvidedVersion { get; set; }
+        public bool Cancelled { get; set; }
+    }
+
     public class AssetsManager
     {
         public Game Game;
+        public event EventHandler<VersionPromptEventArgs> OnVersionPrompt;
         public bool Silent = false;
         public bool SkipProcess = false;
-        public bool ResolveDependencies = false;        
+        public bool ResolveDependencies = false;
         public string SpecifyUnityVersion;
         public CancellationTokenSource tokenSource = new CancellationTokenSource();
         public List<SerializedFile> assetsFileList = new List<SerializedFile>();
@@ -370,7 +378,7 @@ namespace AssetStudio
                     }
 
                     Logger.Verbose("Load all entries");
-                    Logger.Verbose($"Found {archive.Entries.Count} entries"); 
+                    Logger.Verbose($"Found {archive.Entries.Count} entries");
                     foreach (ZipArchiveEntry entry in archive.Entries)
                     {
                         try
@@ -436,7 +444,7 @@ namespace AssetStudio
                             LoadMhyFile(subReader, reader.FullPath, offset, false);
                             break;
                     }
-                }    
+                }
             }
             catch (Exception e)
             {
@@ -527,7 +535,7 @@ namespace AssetStudio
                 reader.Dispose();
             }
         }
-        
+
         private void LoadBlbFile(FileReader reader, string originalPath = null, long originalOffset = 0, bool log = true)
         {
             if (log)
@@ -571,6 +579,22 @@ namespace AssetStudio
         {
             if (assetsFile.IsVersionStripped && string.IsNullOrEmpty(SpecifyUnityVersion))
             {
+                // Try to prompt user for version if event is subscribed
+                if (OnVersionPrompt != null)
+                {
+                    var eventArgs = new VersionPromptEventArgs
+                    {
+                        FileName = assetsFile.fileName
+                    };
+                    OnVersionPrompt(this, eventArgs);
+
+                    if (!eventArgs.Cancelled && !string.IsNullOrEmpty(eventArgs.UserProvidedVersion))
+                    {
+                        assetsFile.SetVersion(eventArgs.UserProvidedVersion);
+                        return;
+                    }
+                }
+
                 throw new Exception("The Unity version has been stripped, please set the version in the options");
             }
             if (!string.IsNullOrEmpty(SpecifyUnityVersion))
@@ -702,27 +726,27 @@ namespace AssetStudio
                                     case Transform m_Transform:
                                         Logger.Verbose($"Fetched Transform component with {m_Transform.m_PathID} in file {m_Transform.assetsFile.fileName}, assigning to GameObject components...");
                                         m_GameObject.m_Transform = m_Transform;
-                                            break;
+                                        break;
                                     case MeshRenderer m_MeshRenderer:
                                         Logger.Verbose($"Fetched MeshRenderer component with {m_MeshRenderer.m_PathID} in file {m_MeshRenderer.assetsFile.fileName}, assigning to GameObject components...");
                                         m_GameObject.m_MeshRenderer = m_MeshRenderer;
-                                            break;
+                                        break;
                                     case MeshFilter m_MeshFilter:
                                         Logger.Verbose($"Fetched MeshFilter component with {m_MeshFilter.m_PathID} in file {m_MeshFilter.assetsFile.fileName}, assigning to GameObject components...");
                                         m_GameObject.m_MeshFilter = m_MeshFilter;
-                                            break;
+                                        break;
                                     case SkinnedMeshRenderer m_SkinnedMeshRenderer:
                                         Logger.Verbose($"Fetched SkinnedMeshRenderer component with {m_SkinnedMeshRenderer.m_PathID} in file {m_SkinnedMeshRenderer.assetsFile.fileName}, assigning to GameObject components...");
                                         m_GameObject.m_SkinnedMeshRenderer = m_SkinnedMeshRenderer;
-                                            break;
+                                        break;
                                     case Animator m_Animator:
                                         Logger.Verbose($"Fetched Animator component with {m_Animator.m_PathID} in file {m_Animator.assetsFile.fileName}, assigning to GameObject components...");
                                         m_GameObject.m_Animator = m_Animator;
-                                            break;
+                                        break;
                                     case Animation m_Animation:
                                         Logger.Verbose($"Fetched Animation component with {m_Animation.m_PathID} in file {m_Animation.assetsFile.fileName}, assigning to GameObject components...");
                                         m_GameObject.m_Animation = m_Animation;
-                                            break;
+                                        break;
                                 }
                             }
                         }
