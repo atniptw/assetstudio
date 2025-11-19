@@ -1,8 +1,8 @@
 # Unity Extractor Utility Asset Studio (updated)
 
-**Version 2.0.0**
+**Version 2.2.0**
 
-A Unity asset extraction tool supporting Unity 2.x through Unity 6.
+A Unity asset extraction tool supporting Unity 2.x through Unity 6 with multi-threaded export capabilities.
 
 ## Download
 
@@ -23,17 +23,28 @@ This project has evolved through several iterations:
 
 Note: Requires Internet connection to fetch asset_index jsons.
 
-## Unity Version Support
+## Features
+
+### Performance
+- **Parallel Asset Export**: Multi-threaded export engine utilizing all CPU cores for 2-8x faster export speeds
+- Optimized for batch processing large asset collections
+- Thread-safe file operations prevent data corruption
+
+### Unity Version Support
 
 **Supported Versions**: Unity 2.x through Unity 6 (all 6000.x versions including 6000.0 - 6000.4+)
 
-### Unity 6 Support (Added November 2025)
+#### Unity 6 Support (Added November 2025)
 
 - Full support for Unity 6000.0.x - 6000.4.x series (Unity 6 / Unity 6.1 / Unity 6.2 / Unity 6.3 / Unity 6.4)
 - Version parsing handles new 6000.x.y format (replaces year-based 2023.x naming)
 - Texture serialization updated for Unity 2023.2+ format changes (removed `m_ForcedFallbackFormat` and `m_DownscaleFallback` fields)
 - Bundle loading, asset enumeration, and texture decoding all functional
 - Known limitation: Some platform-specific texture compression formats may not decode correctly
+
+### User Experience
+- **Interactive Version Prompt**: Automatic dialog for stripped Unity versions - no more error floods
+- Version input applies globally to all subsequent files in batch operations
 
 ---
 
