@@ -14,9 +14,9 @@ namespace AssetStudio.ModViewer.Services
     public class AssetExtractor
     {
         private readonly DiagnosticsService diagnostics;
-        private const int MaxTextureCount = 12;
-        private const int MaxTextureBytesPerTexture = 6 * 1024 * 1024;
-        private const int MaxTextureBytesTotal = 24 * 1024 * 1024;
+        private const int MaxTextureCount = 24;
+        private const int MaxTextureBytesPerTexture = 8 * 1024 * 1024;
+        private const int MaxTextureBytesTotal = 48 * 1024 * 1024;
 
         public AssetExtractor(DiagnosticsService diagnostics)
         {
@@ -342,6 +342,9 @@ namespace AssetStudio.ModViewer.Services
             int totalTextureBytes = 0;
             int skippedByCap = 0;
             int decodeFailures = 0;
+            int missingGuidRefs = 0;
+            int missingPathMappings = 0;
+            int missingAssetEntries = 0;
 
             foreach (var asset in assetFiles)
             {
@@ -355,59 +358,88 @@ namespace AssetStudio.ModViewer.Services
                 {
                     var yaml = Encoding.UTF8.GetString(asset.Value);
                     var matName = MatchValue(yaml, @"^\s*m_Name:\s*(.+)$") ?? Path.GetFileNameWithoutExtension(path);
+                    var texEnvGuidByName = ParseYamlTexEnvGuidMap(yaml);
 
                     var baseColor = ParseColor(yaml, "_Color") ?? new[] { 1f, 1f, 1f, 1f };
                     var metallic = ParseFloatProperty(yaml, "_Metallic", 0f);
                     var glossiness = ParseFloatProperty(yaml, "_Glossiness", 0.5f);
                     var roughness = Math.Clamp(1f - glossiness, 0f, 1f);
 
-                    var textureIndex = -1;
-                    var mainTexGuid = ParseTextureGuid(yaml, "_MainTex");
-                    if (!string.IsNullOrWhiteSpace(mainTexGuid) &&
-                        pathnameByGuid.TryGetValue(mainTexGuid, out var texturePath) &&
-                        assetFiles.TryGetValue(texturePath, out var textureBytes))
+                    var albedoTextureIndex = ResolveYamlTextureIndex(
+                        yaml,
+                        pathnameByGuid,
+                        assetFiles,
+                        textureIndexByPath,
+                        avatarData,
+                        ref totalTextureBytes,
+                        ref skippedByCap,
+                        ref decodeFailures,
+                        ref missingGuidRefs,
+                        ref missingPathMappings,
+                        ref missingAssetEntries,
+                        "_BaseMap",
+                        "_MainTex",
+                        "_DiffuseMap");
+
+                    var normalTextureIndex = ResolveYamlTextureIndex(
+                        yaml,
+                        pathnameByGuid,
+                        assetFiles,
+                        textureIndexByPath,
+                        avatarData,
+                        ref totalTextureBytes,
+                        ref skippedByCap,
+                        ref decodeFailures,
+                        ref missingGuidRefs,
+                        ref missingPathMappings,
+                        ref missingAssetEntries,
+                        "_BumpMap",
+                        "_NormalMap");
+
+                    if (albedoTextureIndex < 0)
                     {
-                        if (!textureIndexByPath.TryGetValue(texturePath, out textureIndex))
+                        var albedoGuid = SelectYamlTexEnvGuid(texEnvGuidByName, preferNormal: false);
+                        if (!string.IsNullOrWhiteSpace(albedoGuid))
                         {
-                            if (avatarData.Textures.Count >= MaxTextureCount ||
-                                textureBytes.Length > MaxTextureBytesPerTexture ||
-                                totalTextureBytes + textureBytes.Length > MaxTextureBytesTotal)
-                            {
-                                skippedByCap++;
-                                textureIndex = -1;
-                            }
-                            else
-                            {
-                                var mime = DetectImageMimeType(textureBytes);
-                                if (mime != null)
-                                {
-                                    var (width, height) = TryReadImageSize(textureBytes, mime);
-                                    var dataUrl = $"data:{mime};base64,{Convert.ToBase64String(textureBytes)}";
-                                    textureIndex = avatarData.Textures.Count;
-                                    avatarData.Textures.Add(new Models.AvatarData.TextureData
-                                    {
-                                        Name = Path.GetFileNameWithoutExtension(texturePath),
-                                        Width = width,
-                                        Height = height,
-                                        Format = mime,
-                                        DataUrl = dataUrl
-                                    });
-                                    textureIndexByPath[texturePath] = textureIndex;
-                                    totalTextureBytes += textureBytes.Length;
-                                }
-                                else
-                                {
-                                    decodeFailures++;
-                                    textureIndex = -1;
-                                }
-                            }
+                            albedoTextureIndex = ResolveYamlTextureIndexByGuid(
+                                albedoGuid,
+                                pathnameByGuid,
+                                assetFiles,
+                                textureIndexByPath,
+                                avatarData,
+                                ref totalTextureBytes,
+                                ref skippedByCap,
+                                ref decodeFailures,
+                                ref missingPathMappings,
+                                ref missingAssetEntries);
+                        }
+                    }
+
+                    if (normalTextureIndex < 0)
+                    {
+                        var normalGuid = SelectYamlTexEnvGuid(texEnvGuidByName, preferNormal: true);
+                        if (!string.IsNullOrWhiteSpace(normalGuid))
+                        {
+                            normalTextureIndex = ResolveYamlTextureIndexByGuid(
+                                normalGuid,
+                                pathnameByGuid,
+                                assetFiles,
+                                textureIndexByPath,
+                                avatarData,
+                                ref totalTextureBytes,
+                                ref skippedByCap,
+                                ref decodeFailures,
+                                ref missingPathMappings,
+                                ref missingAssetEntries);
                         }
                     }
 
                     var materialData = new Models.AvatarData.MaterialData
                     {
                         Name = matName,
-                        TextureIndex = textureIndex,
+                        TextureIndex = albedoTextureIndex,
+                        AlbedoTextureIndex = albedoTextureIndex,
+                        NormalTextureIndex = normalTextureIndex,
                         BaseColor = baseColor,
                         Metallic = metallic,
                         Roughness = roughness
@@ -430,8 +462,172 @@ namespace AssetStudio.ModViewer.Services
             {
                 diagnostics.Add("warn", $"Failed to decode {decodeFailures} textures (unsupported format)");
             }
+            if (missingGuidRefs > 0 || missingPathMappings > 0 || missingAssetEntries > 0)
+            {
+                diagnostics.Add(
+                    "info",
+                    $"YAML texture refs unresolved: missingGuid={missingGuidRefs}, missingPath={missingPathMappings}, missingAsset={missingAssetEntries}");
+            }
 
             return materialIndexByPath;
+        }
+
+        private int ResolveYamlTextureIndex(
+            string yaml,
+            Dictionary<string, string> pathnameByGuid,
+            Dictionary<string, byte[]> assetFiles,
+            Dictionary<string, int> textureIndexByPath,
+            Models.AvatarData avatarData,
+            ref int totalTextureBytes,
+            ref int skippedByCap,
+            ref int decodeFailures,
+            ref int missingGuidRefs,
+            ref int missingPathMappings,
+            ref int missingAssetEntries,
+            params string[] keys)
+        {
+            if (keys == null || keys.Length == 0)
+                return -1;
+
+            foreach (var key in keys)
+            {
+                var guid = ParseTextureGuid(yaml, key);
+                if (string.IsNullOrWhiteSpace(guid))
+                {
+                    missingGuidRefs++;
+                    continue;
+                }
+                var resolvedIndex = ResolveYamlTextureIndexByGuid(
+                    guid,
+                    pathnameByGuid,
+                    assetFiles,
+                    textureIndexByPath,
+                    avatarData,
+                    ref totalTextureBytes,
+                    ref skippedByCap,
+                    ref decodeFailures,
+                    ref missingPathMappings,
+                    ref missingAssetEntries);
+                if (resolvedIndex >= 0)
+                    return resolvedIndex;
+            }
+
+            return -1;
+        }
+
+        private int ResolveYamlTextureIndexByGuid(
+            string guid,
+            Dictionary<string, string> pathnameByGuid,
+            Dictionary<string, byte[]> assetFiles,
+            Dictionary<string, int> textureIndexByPath,
+            Models.AvatarData avatarData,
+            ref int totalTextureBytes,
+            ref int skippedByCap,
+            ref int decodeFailures,
+            ref int missingPathMappings,
+            ref int missingAssetEntries)
+        {
+            if (string.IsNullOrWhiteSpace(guid))
+                return -1;
+
+            if (!pathnameByGuid.TryGetValue(guid, out var texturePath))
+            {
+                missingPathMappings++;
+                return -1;
+            }
+
+            if (!assetFiles.TryGetValue(texturePath, out var textureBytes))
+            {
+                missingAssetEntries++;
+                return -1;
+            }
+
+            if (textureIndexByPath.TryGetValue(texturePath, out var existingIndex))
+                return existingIndex;
+
+            if (avatarData.Textures.Count >= MaxTextureCount ||
+                textureBytes.Length > MaxTextureBytesPerTexture ||
+                totalTextureBytes + textureBytes.Length > MaxTextureBytesTotal)
+            {
+                skippedByCap++;
+                return -1;
+            }
+
+            var mime = DetectImageMimeType(textureBytes);
+            if (mime == null)
+            {
+                decodeFailures++;
+                return -1;
+            }
+
+            var (width, height) = TryReadImageSize(textureBytes, mime);
+            var dataUrl = $"data:{mime};base64,{Convert.ToBase64String(textureBytes)}";
+            var index = avatarData.Textures.Count;
+            avatarData.Textures.Add(new Models.AvatarData.TextureData
+            {
+                Name = Path.GetFileNameWithoutExtension(texturePath),
+                Width = width,
+                Height = height,
+                Format = mime,
+                DataUrl = dataUrl
+            });
+            textureIndexByPath[texturePath] = index;
+            totalTextureBytes += textureBytes.Length;
+            return index;
+        }
+
+        private static Dictionary<string, string> ParseYamlTexEnvGuidMap(string yaml)
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(yaml))
+                return map;
+
+            var matches = Regex.Matches(
+                yaml,
+                @"^\s*-\s*([^:]+):\s*\{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{32})",
+                RegexOptions.Multiline);
+
+            foreach (Match match in matches)
+            {
+                var key = match.Groups[1].Value.Trim();
+                var guid = match.Groups[2].Value.Trim();
+                if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(guid) && !map.ContainsKey(key))
+                {
+                    map[key] = guid;
+                }
+            }
+
+            return map;
+        }
+
+        private static string? SelectYamlTexEnvGuid(Dictionary<string, string> texEnvGuidByName, bool preferNormal)
+        {
+            if (texEnvGuidByName == null || texEnvGuidByName.Count == 0)
+                return null;
+
+            if (preferNormal)
+            {
+                var normalEntry = texEnvGuidByName.FirstOrDefault(pair =>
+                    pair.Key.Contains("normal", StringComparison.OrdinalIgnoreCase) ||
+                    pair.Key.Contains("bump", StringComparison.OrdinalIgnoreCase) ||
+                    pair.Key.Contains("nrm", StringComparison.OrdinalIgnoreCase));
+                return string.IsNullOrWhiteSpace(normalEntry.Key) ? null : normalEntry.Value;
+            }
+
+            var albedoEntry = texEnvGuidByName.FirstOrDefault(pair =>
+                pair.Key.Contains("base", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("main", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("diff", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Contains("albedo", StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(albedoEntry.Key))
+                return albedoEntry.Value;
+
+            var firstNonNormal = texEnvGuidByName.FirstOrDefault(pair =>
+                !pair.Key.Contains("normal", StringComparison.OrdinalIgnoreCase) &&
+                !pair.Key.Contains("bump", StringComparison.OrdinalIgnoreCase) &&
+                !pair.Key.Contains("nrm", StringComparison.OrdinalIgnoreCase));
+
+            return string.IsNullOrWhiteSpace(firstNonNormal.Key) ? texEnvGuidByName.First().Value : firstNonNormal.Value;
         }
 
         private Dictionary<string, Models.AvatarData.MeshData> ExtractYamlMeshes(Dictionary<string, byte[]> assetFiles)
@@ -943,6 +1139,9 @@ namespace AssetStudio.ModViewer.Services
 
             diagnostics.Add("info", $"Found {avatars.Count} avatars");
 
+            var materialIndexByObjectKey = ExtractPrimaryMaterialsAndTextures(manager, avatarData);
+            var materialIndexByMeshKey = BuildMeshMaterialMap(manager, materialIndexByObjectKey);
+
             // Convert meshes to serializable format
             foreach (var mesh in meshes.Take(10)) // Limit to first 10 meshes for now
             {
@@ -950,26 +1149,17 @@ namespace AssetStudio.ModViewer.Services
                 {
                     var meshData = CreateMeshData(mesh);
                     if (meshData != null)
+                    {
+                        if (materialIndexByMeshKey.TryGetValue(GetObjectKey(mesh), out var materialIndex))
+                        {
+                            meshData.MaterialIndex = materialIndex;
+                        }
                         avatarData.Meshes.Add(meshData);
+                    }
                 }
                 catch (Exception ex)
                 {
                     diagnostics.Add("warn", $"Failed to convert mesh {mesh.Name}: {ex.Message}");
-                }
-            }
-
-            // Convert textures to serializable format
-            foreach (var texture in textures.Take(10)) // Limit to first 10 textures
-            {
-                try
-                {
-                    var textureData = CreateTextureData(texture);
-                    if (textureData != null)
-                        avatarData.Textures.Add(textureData);
-                }
-                catch (Exception ex)
-                {
-                    diagnostics.Add("warn", $"Failed to convert texture {texture.Name}: {ex.Message}");
                 }
             }
 
@@ -1008,22 +1198,308 @@ namespace AssetStudio.ModViewer.Services
             return meshData;
         }
 
-        private Models.AvatarData.TextureData CreateTextureData(Texture2D texture)
+        private Dictionary<string, int> ExtractPrimaryMaterialsAndTextures(AssetsManager manager, Models.AvatarData avatarData)
         {
-            if (texture == null)
+            var materialIndexByObjectKey = new Dictionary<string, int>(StringComparer.Ordinal);
+            var textureIndexByObjectKey = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            int totalTextureBytes = 0;
+            int skippedByCap = 0;
+            int decodeFailures = 0;
+
+            var materials = manager.assetsFileList
+                .SelectMany(f => f.Objects.OfType<Material>() ?? new List<Material>())
+                .ToList();
+
+            diagnostics.Add("info", $"Found {materials.Count} materials");
+
+            foreach (var material in materials)
+            {
+                if (material == null)
+                    continue;
+
+                try
+                {
+                    var baseColor = GetMaterialColor(material, "_BaseColor", "_Color") ?? new[] { 1f, 1f, 1f, 1f };
+                    var metallic = GetMaterialFloat(material, 0f, "_Metallic", "_Metalness");
+                    var smoothness = GetMaterialFloat(material, 0.5f, "_Glossiness", "_Smoothness");
+                    var roughness = Math.Clamp(1f - smoothness, 0f, 1f);
+
+                    var albedoTextureIndex = ResolveMaterialTextureIndex(
+                        material,
+                        textureIndexByObjectKey,
+                        avatarData,
+                        ref totalTextureBytes,
+                        ref skippedByCap,
+                        ref decodeFailures,
+                        "_BaseMap",
+                        "_MainTex",
+                        "_DiffuseMap");
+
+                    var normalTextureIndex = ResolveMaterialTextureIndex(
+                        material,
+                        textureIndexByObjectKey,
+                        avatarData,
+                        ref totalTextureBytes,
+                        ref skippedByCap,
+                        ref decodeFailures,
+                        "_BumpMap",
+                        "_NormalMap");
+
+                    var materialData = new Models.AvatarData.MaterialData
+                    {
+                        Name = material.Name ?? "Material",
+                        TextureIndex = albedoTextureIndex,
+                        AlbedoTextureIndex = albedoTextureIndex,
+                        NormalTextureIndex = normalTextureIndex,
+                        BaseColor = baseColor,
+                        Metallic = metallic,
+                        Roughness = roughness
+                    };
+
+                    materialIndexByObjectKey[GetObjectKey(material)] = avatarData.Materials.Count;
+                    avatarData.Materials.Add(materialData);
+                }
+                catch (Exception ex)
+                {
+                    diagnostics.Add("warn", $"Failed to parse material {material.Name}: {ex.Message}");
+                }
+            }
+
+            if (skippedByCap > 0)
+            {
+                diagnostics.Add("warn", $"Skipped {skippedByCap} primary-path textures due to safety caps");
+            }
+
+            if (decodeFailures > 0)
+            {
+                diagnostics.Add("warn", $"Failed to decode {decodeFailures} primary-path textures");
+            }
+
+            return materialIndexByObjectKey;
+        }
+
+        private Dictionary<string, int> BuildMeshMaterialMap(AssetsManager manager, Dictionary<string, int> materialIndexByObjectKey)
+        {
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            var gameObjects = manager.assetsFileList
+                .SelectMany(f => f.Objects.OfType<GameObject>() ?? new List<GameObject>())
+                .ToList();
+
+            foreach (var gameObject in gameObjects)
+            {
+                if (!TryGetRenderer(gameObject, out var renderer))
+                    continue;
+
+                var materialIndex = ResolveRendererMaterialIndex(renderer, materialIndexByObjectKey);
+                if (materialIndex < 0)
+                    continue;
+
+                var mesh = ResolveRendererMesh(gameObject, renderer);
+                if (mesh == null)
+                    continue;
+
+                var meshKey = GetObjectKey(mesh);
+                if (!map.ContainsKey(meshKey))
+                {
+                    map[meshKey] = materialIndex;
+                }
+            }
+
+            return map;
+        }
+
+        private static bool TryGetRenderer(GameObject gameObject, out Renderer renderer)
+        {
+            if (gameObject?.m_SkinnedMeshRenderer != null)
+            {
+                renderer = gameObject.m_SkinnedMeshRenderer;
+                return true;
+            }
+
+            if (gameObject?.m_MeshRenderer != null)
+            {
+                renderer = gameObject.m_MeshRenderer;
+                return true;
+            }
+
+            renderer = null;
+            return false;
+        }
+
+        private static Mesh ResolveRendererMesh(GameObject gameObject, Renderer renderer)
+        {
+            if (renderer is SkinnedMeshRenderer skinnedMeshRenderer)
+            {
+                return skinnedMeshRenderer.m_Mesh.TryGet(out var skinnedMesh) ? skinnedMesh : null;
+            }
+
+            if (gameObject?.m_MeshFilter != null && gameObject.m_MeshFilter.m_Mesh.TryGet(out var mesh))
+            {
+                return mesh;
+            }
+
+            return null;
+        }
+
+        private static int ResolveRendererMaterialIndex(Renderer renderer, Dictionary<string, int> materialIndexByObjectKey)
+        {
+            if (renderer?.m_Materials == null || renderer.m_Materials.Count == 0)
+                return -1;
+
+            foreach (var materialPtr in renderer.m_Materials)
+            {
+                if (materialPtr.TryGet(out Material material) &&
+                    materialIndexByObjectKey.TryGetValue(GetObjectKey(material), out var materialIndex))
+                {
+                    return materialIndex;
+                }
+            }
+
+            return -1;
+        }
+
+        private int ResolveMaterialTextureIndex(
+            Material material,
+            Dictionary<string, int> textureIndexByObjectKey,
+            Models.AvatarData avatarData,
+            ref int totalTextureBytes,
+            ref int skippedByCap,
+            ref int decodeFailures,
+            params string[] textureKeys)
+        {
+            if (!TryGetMaterialTexture(material, out var texture, textureKeys))
+                return -1;
+
+            var textureKey = GetObjectKey(texture);
+            if (textureIndexByObjectKey.TryGetValue(textureKey, out var existingIndex))
+                return existingIndex;
+
+            if (!TryCreateTextureData(texture, out var textureData, out var encodedSize))
+            {
+                decodeFailures++;
+                return -1;
+            }
+
+            if (avatarData.Textures.Count >= MaxTextureCount ||
+                encodedSize > MaxTextureBytesPerTexture ||
+                totalTextureBytes + encodedSize > MaxTextureBytesTotal)
+            {
+                skippedByCap++;
+                return -1;
+            }
+
+            var textureIndex = avatarData.Textures.Count;
+            avatarData.Textures.Add(textureData);
+            textureIndexByObjectKey[textureKey] = textureIndex;
+            totalTextureBytes += encodedSize;
+
+            return textureIndex;
+        }
+
+        private static bool TryGetMaterialTexture(Material material, out Texture2D texture, params string[] keys)
+        {
+            texture = null;
+            if (material?.m_SavedProperties?.m_TexEnvs == null || keys == null || keys.Length == 0)
+                return false;
+
+            foreach (var key in keys)
+            {
+                var texEnv = material.m_SavedProperties.m_TexEnvs
+                    .FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
+                if (string.IsNullOrWhiteSpace(texEnv.Key))
+                    continue;
+
+                if (texEnv.Value?.m_Texture != null && texEnv.Value.m_Texture.TryGet<Texture2D>(out var resolvedTexture))
+                {
+                    texture = resolvedTexture;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryCreateTextureData(Texture2D texture, out Models.AvatarData.TextureData textureData, out int encodedSize)
+        {
+            textureData = null;
+            encodedSize = 0;
+
+            if (texture == null || texture.m_Width <= 0 || texture.m_Height <= 0)
+                return false;
+
+            try
+            {
+                using var stream = texture.ConvertToStream(ImageFormat.Png, true);
+                if (stream == null || stream.Length <= 0)
+                    return false;
+
+                var bytes = stream.ToArray();
+                encodedSize = bytes.Length;
+
+                textureData = new Models.AvatarData.TextureData
+                {
+                    Name = texture.Name ?? "Texture",
+                    Width = texture.m_Width,
+                    Height = texture.m_Height,
+                    Format = "image/png",
+                    DataUrl = $"data:image/png;base64,{Convert.ToBase64String(bytes)}"
+                };
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static float[] GetMaterialColor(Material material, params string[] keys)
+        {
+            if (material?.m_SavedProperties?.m_Colors == null || keys == null || keys.Length == 0)
                 return null;
 
-            var textureData = new Models.AvatarData.TextureData
+            foreach (var key in keys)
             {
-                Name = texture.Name ?? "Texture",
-                Width = texture.m_Width,
-                Height = texture.m_Height,
-                Format = texture.m_TextureFormat.ToString(),
-                // For large textures, don't include base64 yet
-                DataUrl = $"<{texture.m_Width}x{texture.m_Height}>"
-            };
+                var colorEntry = material.m_SavedProperties.m_Colors
+                    .FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
+                if (string.IsNullOrWhiteSpace(colorEntry.Key))
+                    continue;
 
-            return textureData;
+                return new[]
+                {
+                    colorEntry.Value.R,
+                    colorEntry.Value.G,
+                    colorEntry.Value.B,
+                    colorEntry.Value.A
+                };
+            }
+
+            return null;
+        }
+
+        private static float GetMaterialFloat(Material material, float fallback, params string[] keys)
+        {
+            if (material?.m_SavedProperties?.m_Floats == null || keys == null || keys.Length == 0)
+                return fallback;
+
+            foreach (var key in keys)
+            {
+                var floatEntry = material.m_SavedProperties.m_Floats
+                    .FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(floatEntry.Key))
+                    return floatEntry.Value;
+            }
+
+            return fallback;
+        }
+
+        private static string GetObjectKey(AssetStudio.Object obj)
+        {
+            if (obj == null)
+                return string.Empty;
+
+            return $"{obj.assetsFile?.fileName}:{obj.m_PathID}";
         }
 
         private void ExtractAvatarBones(Avatar avatar, Models.AvatarData avatarData)

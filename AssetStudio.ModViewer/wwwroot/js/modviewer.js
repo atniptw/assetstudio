@@ -15,10 +15,12 @@
                 if (Array.isArray(node.material)) {
                     node.material.forEach((m) => {
                         if (m.map) m.map.dispose();
+                        if (m.normalMap) m.normalMap.dispose();
                         m.dispose();
                     });
                 } else {
                     if (node.material.map) node.material.map.dispose();
+                    if (node.material.normalMap) node.material.normalMap.dispose();
                     node.material.dispose();
                 }
             }
@@ -109,7 +111,6 @@
                         }
 
                         const texture = new THREE.TextureLoader().load(texData.dataUrl);
-                        texture.colorSpace = THREE.SRGBColorSpace;
                         texture.flipY = false;
                         textures.set(idx, texture);
                     } catch (err) {
@@ -131,8 +132,19 @@
                         side: THREE.DoubleSide
                     });
 
-                    if (typeof matData.textureIndex === 'number' && textures.has(matData.textureIndex)) {
-                        material.map = textures.get(matData.textureIndex);
+                    const albedoIndex = typeof matData.albedoTextureIndex === 'number'
+                        ? matData.albedoTextureIndex
+                        : matData.textureIndex;
+                    if (typeof albedoIndex === 'number' && textures.has(albedoIndex)) {
+                        material.map = textures.get(albedoIndex);
+                        material.map.colorSpace = THREE.SRGBColorSpace;
+                        material.needsUpdate = true;
+                    }
+
+                    if (typeof matData.normalTextureIndex === 'number' && textures.has(matData.normalTextureIndex)) {
+                        material.normalMap = textures.get(matData.normalTextureIndex).clone();
+                        material.normalMap.colorSpace = THREE.NoColorSpace;
+                        material.normalMap.flipY = false;
                         material.needsUpdate = true;
                     }
 

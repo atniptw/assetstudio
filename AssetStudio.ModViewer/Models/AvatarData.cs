@@ -33,7 +33,9 @@ namespace AssetStudio.ModViewer.Models
         public class MaterialData
         {
             public string Name { get; set; }
-            public int TextureIndex { get; set; }
+            public int TextureIndex { get; set; } = -1;
+            public int AlbedoTextureIndex { get; set; } = -1;
+            public int NormalTextureIndex { get; set; } = -1;
             public float[] BaseColor { get; set; } = { 1, 1, 1, 1 };
             public float Metallic { get; set; }
             public float Roughness { get; set; }
