@@ -358,3 +358,8 @@ yarn-error.log*
 # Blazor WASM published output
 /AssetStudio.ModViewer/publish/
 /AssetStudio.ModViewer/wwwroot/dist/
+
+# Playwright CLI runtime artifacts
+.playwright/
+.playwright-cli/
+playwright-report/
