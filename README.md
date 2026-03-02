@@ -21,6 +21,13 @@ The release package contains both:
 - **AssetStudio.GUI.exe**: Graphical interface version
 - **AssetStudio.CLI.exe**: Command-line version for automation
 
+## ModViewer (WASM previewer)
+
+ModViewer is a separate Blazor WASM app for R.E.P.O avatar mod preview and dress-up.
+
+- Build with [ModViewer.sln](ModViewer.sln) using `dotnet build ModViewer.sln -c Release /p:WasmBuild=true`
+- Desktop builds remain under [AssetStudio.sln](AssetStudio.sln)
+
 ## Project History
 
 This project has evolved through several iterations:

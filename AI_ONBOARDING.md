@@ -31,6 +31,7 @@ AssetStudio is a **Unity asset extraction tool** that reads Unity game files and
 - **Primary Users**: Game modders, asset extractors, researchers
 - **Interface**: Both GUI (AssetStudio.GUI) and CLI (AssetStudio.CLI)
 - **Critical Feature**: Multi-threaded loading/export for performance
+- **New (2026)**: ModViewer Blazor WASM app for R.E.P.O avatar mod preview
 
 ### Project Structure
 
@@ -60,6 +61,9 @@ AssetStudio.Utility/           # Export utilities
 ├── ModelConverter.cs          # 3D model export (FBX, OBJ)
 ├── AudioClipConverter.cs      # Audio export (WAV, MP3)
 └── ShaderConverter.cs         # Shader text export
+
+[AssetStudio.ModViewer](AssetStudio.ModViewer)         # Blazor WASM mod previewer (new)
+[ModViewer.sln](ModViewer.sln)                  # WASM-safe solution (no FBX/PInvoke)
 
 AssetStudio.FBXWrapper/        # FBX export wrapper
 AssetStudio.FBXNative/         # Native FBX library (C++)

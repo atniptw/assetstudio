@@ -15,11 +15,12 @@
 
 | Task | Owner | Status |
 |------|-------|--------|
-| 1.1 Remove FBX/P/Invoke dependencies from AssetStudio.sln | AI | — |
+| 1.1 Create ModViewer.sln and WASM-only FBX/P/Invoke exclusions | AI | — |
 | 1.2 Create IFileSystem abstraction + implement for File API | You | — |
 | 1.3 Create Blazor WASM project (AssetStudio.ModViewer.csproj) | You | — |
 | 1.4 Test AssetStudio WASM compilation | Both | — |
 | 1.5 Embed base R.E.P.O avatar unitypackage in Blazor assets | You | — |
+| 1.6 Update core docs for ModViewer split build | AI | — |
 
 ### Deliverables
 - AssetStudio compiles to WASM without errors

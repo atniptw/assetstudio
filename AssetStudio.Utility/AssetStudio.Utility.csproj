@@ -9,6 +9,9 @@
     <DebugType>embedded</DebugType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(WasmBuild)'=='true'">
+    <DefineConstants>$(DefineConstants);ASSETSTUDIO_WASM</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Kyaru.Texture2DDecoder" Version="0.17.0" />
     <PackageReference Include="Kyaru.Texture2DDecoder.Windows" Version="0.1.0" />
@@ -16,9 +19,14 @@
     <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="1.0.0-beta15" />
     <PackageReference Include="Vortice.D3DCompiler" Version="3.4.3-beta" />
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(WasmBuild)'!='true'">
     <ProjectReference Include="..\AssetStudio.PInvoke\AssetStudio.PInvoke.csproj" />
     <ProjectReference Include="..\AssetStudio.FBXWrapper\AssetStudio.FBXWrapper.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\AssetStudio\AssetStudio.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(WasmBuild)'=='true'">
+    <Compile Remove="ModelExporter.cs" />
   </ItemGroup>
 </Project>

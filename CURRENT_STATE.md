@@ -6,6 +6,14 @@
 
 ---
 
+## ModViewer Status (March 2026)
+
+**Goal:** Blazor WASM app for R.E.P.O avatar mod preview and dress-up.
+
+- Using [ModViewer.sln](ModViewer.sln) for a WASM-safe project set
+- WASM build uses `/p:WasmBuild=true` to exclude FBX/PInvoke
+- Desktop GUI/CLI remain unchanged under [AssetStudio.sln](AssetStudio.sln)
+
 ## 🎯 Current Status: Parallel Loading FULLY WORKING ✅
 
 **v2.4.0 RELEASED**: Fixed parallel loading issues with duplicate CAB files

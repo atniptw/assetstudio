@@ -66,6 +66,15 @@
 
 ---
 
+## Build Targets and Dependency Exclusions
+
+- Use [ModViewer.sln](ModViewer.sln) for WASM-safe builds
+- Build with `dotnet build ModViewer.sln -c Release /p:WasmBuild=true`
+- FBX export and P/Invoke are excluded in WASM builds
+- Desktop GUI/CLI remain in [AssetStudio.sln](AssetStudio.sln)
+
+---
+
 ## Data Flow: Upload → Preview
 
 ### 1. User Uploads Mod (.unityFS)

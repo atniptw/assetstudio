@@ -9,6 +9,11 @@
 
 **v2.3.2 Released** - Unity 6000 texture loading fixed, all features working
 
+### ModViewer (WASM) Notes
+- Build ModViewer with [ModViewer.sln](ModViewer.sln) and `dotnet build ModViewer.sln -c Release /p:WasmBuild=true`
+- WASM build excludes FBX/PInvoke; do not call FBX export or P/Invoke paths
+- `ASSETSTUDIO_WASM` is defined in WASM builds for conditional code paths
+
 ### What's Working
 - ✅ Unity 6000.0.58f2 texture loading and preview (tested with Marvel Snap)
 - ✅ Multi-threaded parallel export (v2.2.0)

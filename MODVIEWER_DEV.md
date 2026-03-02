@@ -27,13 +27,9 @@ mkdir -p AssetStudio.ModViewer/Components
 mkdir -p AssetStudio.ModViewer/Models
 ```
 
-### 2. Update Solution File
+### 2. Create ModViewer Solution
 
-Add project to `AssetStudio.sln`:
-
-```xml
-<Project "{9A19103F-16F7-4668-BE54-9A1E7A4F7556}" "AssetStudio.ModViewer">AssetStudio.ModViewer/AssetStudio.ModViewer.csproj</Project>
-```
+Create a separate solution for WASM-only builds at [ModViewer.sln](ModViewer.sln).
 
 ### 3. Configure Project References
 
@@ -55,7 +51,7 @@ Add project to `AssetStudio.sln`:
 
 ```bash
 # Build WASM assemblies
-dotnet build AssetStudio.ModViewer -c Release
+dotnet build ModViewer.sln -c Release /p:WasmBuild=true
 
 # Run development server
 cd AssetStudio.ModViewer

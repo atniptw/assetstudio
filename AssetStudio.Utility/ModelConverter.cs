@@ -864,7 +864,7 @@ namespace AssetStudio
                             var track = iAnim.FindTrack(FixBonePath(animationClip, m_EulerCurve.path));
                             foreach (var m_Curve in m_EulerCurve.curve.m_Curve)
                             {
-                                var value = Fbx.EulerToQuaternion(new Vector3(m_Curve.value.X, -m_Curve.value.Y, -m_Curve.value.Z));
+                                var value = EulerToQuaternion(new Vector3(m_Curve.value.X, -m_Curve.value.Y, -m_Curve.value.Z));
                                 track.Rotations.Add(new ImportedKeyframe<Quaternion>(m_Curve.time, value));
                             }
                         }
@@ -980,6 +980,32 @@ namespace AssetStudio
             }
         }
 
+        private static Quaternion EulerToQuaternion(Vector3 euler)
+        {
+    #if ASSETSTUDIO_WASM
+            const float degToRad = (float)(Math.PI / 180.0);
+            var x = euler.X * degToRad * 0.5f;
+            var y = euler.Y * degToRad * 0.5f;
+            var z = euler.Z * degToRad * 0.5f;
+
+            var cx = (float)Math.Cos(x);
+            var sx = (float)Math.Sin(x);
+            var cy = (float)Math.Cos(y);
+            var sy = (float)Math.Sin(y);
+            var cz = (float)Math.Cos(z);
+            var sz = (float)Math.Sin(z);
+
+            var qw = cx * cy * cz + sx * sy * sz;
+            var qx = sx * cy * cz - cx * sy * sz;
+            var qy = cx * sy * cz + sx * cy * sz;
+            var qz = cx * cy * sz - sx * sy * cz;
+
+                return new Quaternion(qx, qy, qz, qw);
+        #else
+            return Fbx.EulerToQuaternion(euler);
+        #endif
+        }
+
         private void ReadCurveData(ImportedKeyframedAnimation iAnim, AnimationClipBindingConstant m_ClipBindingConstant, int index, float time, float[] data, int offset, ref int curveIndex)
         {
             var binding = m_ClipBindingConstant.FindBinding(index);
@@ -1043,7 +1069,7 @@ namespace AssetStudio
                         )));
                         break;
                     case 4:
-                        var value = Fbx.EulerToQuaternion(new Vector3
+                        var value = EulerToQuaternion(new Vector3
                         (
                             data[curveIndex++ + offset],
                             -data[curveIndex++ + offset],
