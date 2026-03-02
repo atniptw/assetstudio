@@ -769,6 +769,8 @@ namespace AssetStudio.Extraction.Core.Services
             var sections = Regex.Matches(prefabYaml, @"^--- !u!(\d+) &(\d+)\r?\n([\s\S]*?)(?=^--- !u!|\z)", RegexOptions.Multiline);
 
             var gameObjectNameById = new Dictionary<long, string>();
+            var gameObjectActiveById = new Dictionary<long, bool>();
+            var rendererEnabledByGameObject = new Dictionary<long, bool>();
             var transformById = new Dictionary<long, TransformState>();
             var transformIdByGameObject = new Dictionary<long, long>();
             var meshGuidByGameObject = new Dictionary<long, string>();
@@ -790,6 +792,9 @@ namespace AssetStudio.Extraction.Core.Services
                     {
                         gameObjectNameById[objectId] = goName;
                     }
+
+                    var isActive = ParseBoolInt(body, "m_IsActive", true);
+                    gameObjectActiveById[objectId] = isActive;
                 }
                 else if (classId == 4)
                 {
@@ -829,6 +834,22 @@ namespace AssetStudio.Extraction.Core.Services
                     if (gameObjectId == 0)
                         continue;
 
+                    rendererEnabledByGameObject[gameObjectId] = ParseBoolInt(body, "m_Enabled", true);
+
+                    var materialGuid = ParseFirstMaterialGuid(body);
+                    if (!string.IsNullOrWhiteSpace(materialGuid))
+                    {
+                        materialGuidByGameObject[gameObjectId] = materialGuid;
+                    }
+                }
+                else if (classId == 137)
+                {
+                    var gameObjectId = ParseFileId(body, "m_GameObject");
+                    if (gameObjectId == 0)
+                        continue;
+
+                    rendererEnabledByGameObject[gameObjectId] = ParseBoolInt(body, "m_Enabled", true);
+
                     var materialGuid = ParseFirstMaterialGuid(body);
                     if (!string.IsNullOrWhiteSpace(materialGuid))
                     {
@@ -838,12 +859,24 @@ namespace AssetStudio.Extraction.Core.Services
             }
 
             var worldCache = new Dictionary<long, TransformWorld>();
+            var activeHierarchyCache = new Dictionary<long, bool>();
             var result = new List<ExtractionSceneData.MeshData>();
 
             foreach (var meshBinding in meshGuidByGameObject)
             {
                 var gameObjectId = meshBinding.Key;
                 var meshGuid = meshBinding.Value;
+                if (!IsGameObjectVisible(
+                        gameObjectId,
+                        gameObjectActiveById,
+                        rendererEnabledByGameObject,
+                        transformIdByGameObject,
+                        transformById,
+                        activeHierarchyCache))
+                {
+                    continue;
+                }
+
                 if (!pathnameByGuid.TryGetValue(meshGuid, out var meshPath))
                     continue;
                 if (!yamlMeshesByPath.TryGetValue(meshPath, out var meshTemplate))
@@ -870,6 +903,67 @@ namespace AssetStudio.Extraction.Core.Services
             }
 
             return result;
+        }
+
+        private static bool IsGameObjectVisible(
+            long gameObjectId,
+            Dictionary<long, bool> gameObjectActiveById,
+            Dictionary<long, bool> rendererEnabledByGameObject,
+            Dictionary<long, long> transformIdByGameObject,
+            Dictionary<long, TransformState> transformById,
+            Dictionary<long, bool> cache)
+        {
+            if (!rendererEnabledByGameObject.TryGetValue(gameObjectId, out var rendererEnabled))
+                rendererEnabled = true;
+
+            if (!rendererEnabled)
+                return false;
+
+            return IsGameObjectActiveInHierarchy(gameObjectId, gameObjectActiveById, transformIdByGameObject, transformById, cache);
+        }
+
+        private static bool IsGameObjectActiveInHierarchy(
+            long gameObjectId,
+            Dictionary<long, bool> gameObjectActiveById,
+            Dictionary<long, long> transformIdByGameObject,
+            Dictionary<long, TransformState> transformById,
+            Dictionary<long, bool> cache)
+        {
+            if (cache.TryGetValue(gameObjectId, out var cached))
+                return cached;
+
+            if (!gameObjectActiveById.TryGetValue(gameObjectId, out var selfActive))
+                selfActive = true;
+
+            if (!selfActive)
+            {
+                cache[gameObjectId] = false;
+                return false;
+            }
+
+            if (!transformIdByGameObject.TryGetValue(gameObjectId, out var transformId) ||
+                !transformById.TryGetValue(transformId, out var transformState) ||
+                transformState.ParentTransformId == 0)
+            {
+                cache[gameObjectId] = true;
+                return true;
+            }
+
+            if (!transformById.TryGetValue(transformState.ParentTransformId, out var parentTransformState))
+            {
+                cache[gameObjectId] = true;
+                return true;
+            }
+
+            var active = IsGameObjectActiveInHierarchy(
+                parentTransformState.GameObjectId,
+                gameObjectActiveById,
+                transformIdByGameObject,
+                transformById,
+                cache);
+
+            cache[gameObjectId] = active;
+            return active;
         }
 
         private static int ResolveMaterialIndex(
@@ -973,6 +1067,15 @@ namespace AssetStudio.Extraction.Core.Services
         {
             var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{fileID:\s*(-?\d+)", RegexOptions.Multiline);
             return match.Success && long.TryParse(match.Groups[1].Value, out var fileId) ? fileId : 0;
+        }
+
+        private static bool ParseBoolInt(string body, string fieldName, bool fallback)
+        {
+            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*(\d+)\s*$", RegexOptions.Multiline);
+            if (!match.Success || !int.TryParse(match.Groups[1].Value, out var value))
+                return fallback;
+
+            return value != 0;
         }
 
         private static string? ParseGuid(string body, string fieldName)
