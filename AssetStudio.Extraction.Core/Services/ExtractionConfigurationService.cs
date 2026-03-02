@@ -3,16 +3,16 @@ using AssetStudio.Extraction.Core.Models;
 
 namespace AssetStudio.Extraction.Core.Services
 {
-    public class AvatarExtractionService
+    public class ExtractionConfigurationService
     {
-        public AvatarExtractionOptions DefaultOptions { get; } = new();
+        public ExtractionOptions DefaultOptions { get; } = new();
 
-        public AvatarExtractionOptions MergeOptions(AvatarExtractionOptions? overrides)
+        public ExtractionOptions MergeOptions(ExtractionOptions? overrides)
         {
             if (overrides == null)
                 return DefaultOptions;
 
-            return new AvatarExtractionOptions
+            return new ExtractionOptions
             {
                 MaxTextureCount = overrides.MaxTextureCount,
                 MaxTextureBytesPerTexture = overrides.MaxTextureBytesPerTexture,

@@ -1,6 +1,6 @@
 namespace AssetStudio.Extraction.Core.Models
 {
-    public sealed class AvatarExtractionOptions
+    public sealed class ExtractionOptions
     {
         public int MaxTextureCount { get; init; } = 24;
         public int MaxTextureBytesPerTexture { get; init; } = 8 * 1024 * 1024;

@@ -1,0 +1,56 @@
+using System.Collections.Generic;
+
+namespace AssetStudio.Extraction.Core.Models
+{
+    public class ExtractionSceneData
+    {
+        public class MeshData
+        {
+            public string Name { get; set; }
+            public float[] Vertices { get; set; }
+            public uint[] Indices { get; set; }
+            public float[] Normals { get; set; }
+            public float[] UV { get; set; }
+            public int MaterialIndex { get; set; }
+            public float[] Position { get; set; } = { 0f, 0f, 0f };
+            public float[] Rotation { get; set; } = { 0f, 0f, 0f, 1f };
+            public float[] Scale { get; set; } = { 1f, 1f, 1f };
+        }
+
+        public class TextureData
+        {
+            public string Name { get; set; }
+            public int Width { get; set; }
+            public int Height { get; set; }
+            public string Format { get; set; }
+            public string DataUrl { get; set; }
+        }
+
+        public class MaterialData
+        {
+            public string Name { get; set; }
+            public int TextureIndex { get; set; } = -1;
+            public int AlbedoTextureIndex { get; set; } = -1;
+            public int NormalTextureIndex { get; set; } = -1;
+            public float[] BaseColor { get; set; } = { 1f, 1f, 1f, 1f };
+            public float Metallic { get; set; }
+            public float Roughness { get; set; }
+        }
+
+        public class BoneData
+        {
+            public string Name { get; set; }
+            public int ParentIndex { get; set; }
+            public float[] Position { get; set; }
+            public float[] Rotation { get; set; }
+            public float[] Scale { get; set; }
+        }
+
+        public string Name { get; set; }
+        public List<MeshData> Meshes { get; set; } = new();
+        public List<TextureData> Textures { get; set; } = new();
+        public List<MaterialData> Materials { get; set; } = new();
+        public List<BoneData> Bones { get; set; } = new();
+        public int RootBoneIndex { get; set; } = 0;
+    }
+}
