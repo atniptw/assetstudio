@@ -6,6 +6,25 @@
         frameHandle: null,
     };
 
+    function disposeObjectTree(obj) {
+        obj.traverse((node) => {
+            if (node.geometry) {
+                node.geometry.dispose();
+            }
+            if (node.material) {
+                if (Array.isArray(node.material)) {
+                    node.material.forEach((m) => {
+                        if (m.map) m.map.dispose();
+                        m.dispose();
+                    });
+                } else {
+                    if (node.material.map) node.material.map.dispose();
+                    node.material.dispose();
+                }
+            }
+        });
+    }
+
     function init(canvasId) {
         const canvas = document.getElementById(canvasId);
         if (!canvas) {
@@ -35,13 +54,6 @@
         const grid = new THREE.GridHelper(6, 20, 0x2e394d, 0x202634);
         grid.position.y = -0.8;
         scene.add(grid);
-
-        const placeholder = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.35, 1.0, 6, 12),
-            new THREE.MeshStandardMaterial({ color: 0x5b8cff, metalness: 0.1, roughness: 0.6 })
-        );
-        placeholder.position.y = 0.4;
-        scene.add(placeholder);
 
         state.renderer = renderer;
         state.scene = scene;
@@ -79,16 +91,33 @@
                 return;
             }
 
-            // Remove placeholder geometry
-            const placeholders = state.scene.children.filter(obj => obj.geometry?.type === 'CapsuleGeometry');
-            placeholders.forEach(obj => {
+            const oldAvatars = state.scene.children.filter(obj => obj.name === 'Avatar');
+            oldAvatars.forEach((obj) => {
                 state.scene.remove(obj);
-                if (obj.geometry) obj.geometry.dispose();
-                if (obj.material) obj.material.dispose();
+                disposeObjectTree(obj);
             });
 
             // Create materials map
             const materials = new Map();
+            const textures = new Map();
+
+            if (avatarData.textures && Array.isArray(avatarData.textures)) {
+                avatarData.textures.forEach((texData, idx) => {
+                    try {
+                        if (typeof texData.dataUrl !== 'string' || !texData.dataUrl.startsWith('data:image/')) {
+                            return;
+                        }
+
+                        const texture = new THREE.TextureLoader().load(texData.dataUrl);
+                        texture.colorSpace = THREE.SRGBColorSpace;
+                        texture.flipY = false;
+                        textures.set(idx, texture);
+                    } catch (err) {
+                        console.warn(`Failed to create texture ${idx}:`, err.message);
+                    }
+                });
+            }
+
             if (avatarData.materials && Array.isArray(avatarData.materials)) {
                 avatarData.materials.forEach((matData, idx) => {
                     const material = new THREE.MeshStandardMaterial({
@@ -101,6 +130,12 @@
                         roughness: matData.roughness ?? 0.5,
                         side: THREE.DoubleSide
                     });
+
+                    if (typeof matData.textureIndex === 'number' && textures.has(matData.textureIndex)) {
+                        material.map = textures.get(matData.textureIndex);
+                        material.needsUpdate = true;
+                    }
+
                     materials.set(idx, material);
                 });
             }

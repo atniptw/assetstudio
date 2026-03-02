@@ -14,6 +14,9 @@ namespace AssetStudio.ModViewer.Services
     public class AssetExtractor
     {
         private readonly DiagnosticsService diagnostics;
+        private const int MaxTextureCount = 12;
+        private const int MaxTextureBytesPerTexture = 6 * 1024 * 1024;
+        private const int MaxTextureBytesTotal = 24 * 1024 * 1024;
 
         public AssetExtractor(DiagnosticsService diagnostics)
         {
@@ -301,7 +304,8 @@ namespace AssetStudio.ModViewer.Services
                 if (avatarData.Meshes.Count == 0)
                 {
                     var yamlMeshesByPath = ExtractYamlMeshes(assetFiles);
-                    var placedMeshes = ExtractPlacedYamlMeshes(assetFiles, pathnameByGuid, yamlMeshesByPath);
+                    var materialIndexByPath = ExtractYamlMaterialsAndTextures(assetFiles, pathnameByGuid, avatarData);
+                    var placedMeshes = ExtractPlacedYamlMeshes(assetFiles, pathnameByGuid, yamlMeshesByPath, materialIndexByPath);
 
                     if (placedMeshes.Count > 0)
                     {
@@ -317,12 +321,117 @@ namespace AssetStudio.ModViewer.Services
                         }
                     }
                 }
+
+                diagnostics.Add("info", $"Extracted {avatarData.Materials.Count} materials and {avatarData.Textures.Count} textures");
             }
             catch (Exception ex)
             {
                 diagnostics.Add("error", $"Failed to load assets from unitypackage: {ex.Message}");
                 throw;
             }
+        }
+
+        private Dictionary<string, int> ExtractYamlMaterialsAndTextures(
+            Dictionary<string, byte[]> assetFiles,
+            Dictionary<string, string> pathnameByGuid,
+            Models.AvatarData avatarData)
+        {
+            var materialIndexByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var textureIndexByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            int totalTextureBytes = 0;
+            int skippedByCap = 0;
+            int decodeFailures = 0;
+
+            foreach (var asset in assetFiles)
+            {
+                var path = asset.Key;
+                if (!path.EndsWith(".mat", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (asset.Value.Length < 8 || !(asset.Value[0] == (byte)'%' && asset.Value[1] == (byte)'Y'))
+                    continue;
+
+                try
+                {
+                    var yaml = Encoding.UTF8.GetString(asset.Value);
+                    var matName = MatchValue(yaml, @"^\s*m_Name:\s*(.+)$") ?? Path.GetFileNameWithoutExtension(path);
+
+                    var baseColor = ParseColor(yaml, "_Color") ?? new[] { 1f, 1f, 1f, 1f };
+                    var metallic = ParseFloatProperty(yaml, "_Metallic", 0f);
+                    var glossiness = ParseFloatProperty(yaml, "_Glossiness", 0.5f);
+                    var roughness = Math.Clamp(1f - glossiness, 0f, 1f);
+
+                    var textureIndex = -1;
+                    var mainTexGuid = ParseTextureGuid(yaml, "_MainTex");
+                    if (!string.IsNullOrWhiteSpace(mainTexGuid) &&
+                        pathnameByGuid.TryGetValue(mainTexGuid, out var texturePath) &&
+                        assetFiles.TryGetValue(texturePath, out var textureBytes))
+                    {
+                        if (!textureIndexByPath.TryGetValue(texturePath, out textureIndex))
+                        {
+                            if (avatarData.Textures.Count >= MaxTextureCount ||
+                                textureBytes.Length > MaxTextureBytesPerTexture ||
+                                totalTextureBytes + textureBytes.Length > MaxTextureBytesTotal)
+                            {
+                                skippedByCap++;
+                                textureIndex = -1;
+                            }
+                            else
+                            {
+                                var mime = DetectImageMimeType(textureBytes);
+                                if (mime != null)
+                                {
+                                    var (width, height) = TryReadImageSize(textureBytes, mime);
+                                    var dataUrl = $"data:{mime};base64,{Convert.ToBase64String(textureBytes)}";
+                                    textureIndex = avatarData.Textures.Count;
+                                    avatarData.Textures.Add(new Models.AvatarData.TextureData
+                                    {
+                                        Name = Path.GetFileNameWithoutExtension(texturePath),
+                                        Width = width,
+                                        Height = height,
+                                        Format = mime,
+                                        DataUrl = dataUrl
+                                    });
+                                    textureIndexByPath[texturePath] = textureIndex;
+                                    totalTextureBytes += textureBytes.Length;
+                                }
+                                else
+                                {
+                                    decodeFailures++;
+                                    textureIndex = -1;
+                                }
+                            }
+                        }
+                    }
+
+                    var materialData = new Models.AvatarData.MaterialData
+                    {
+                        Name = matName,
+                        TextureIndex = textureIndex,
+                        BaseColor = baseColor,
+                        Metallic = metallic,
+                        Roughness = roughness
+                    };
+
+                    materialIndexByPath[path] = avatarData.Materials.Count;
+                    avatarData.Materials.Add(materialData);
+                }
+                catch (Exception ex)
+                {
+                    diagnostics.Add("warn", $"Material parse failed for {path}: {ex.Message}");
+                }
+            }
+
+            if (skippedByCap > 0)
+            {
+                diagnostics.Add("warn", $"Skipped {skippedByCap} textures due to safety caps");
+            }
+            if (decodeFailures > 0)
+            {
+                diagnostics.Add("warn", $"Failed to decode {decodeFailures} textures (unsupported format)");
+            }
+
+            return materialIndexByPath;
         }
 
         private Dictionary<string, Models.AvatarData.MeshData> ExtractYamlMeshes(Dictionary<string, byte[]> assetFiles)
@@ -363,7 +472,8 @@ namespace AssetStudio.ModViewer.Services
         private List<Models.AvatarData.MeshData> ExtractPlacedYamlMeshes(
             Dictionary<string, byte[]> assetFiles,
             Dictionary<string, string> pathnameByGuid,
-            Dictionary<string, Models.AvatarData.MeshData> yamlMeshesByPath)
+            Dictionary<string, Models.AvatarData.MeshData> yamlMeshesByPath,
+            Dictionary<string, int> materialIndexByPath)
         {
             var prefabEntry = assetFiles
                 .FirstOrDefault(kvp => kvp.Key.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
@@ -377,6 +487,7 @@ namespace AssetStudio.ModViewer.Services
             var transformById = new Dictionary<long, TransformState>();
             var transformIdByGameObject = new Dictionary<long, long>();
             var meshGuidByGameObject = new Dictionary<long, string>();
+            var materialGuidByGameObject = new Dictionary<long, string>();
 
             foreach (Match section in sections)
             {
@@ -427,6 +538,18 @@ namespace AssetStudio.ModViewer.Services
                         meshGuidByGameObject[gameObjectId] = meshGuid;
                     }
                 }
+                else if (classId == 23)
+                {
+                    var gameObjectId = ParseFileId(body, "m_GameObject");
+                    if (gameObjectId == 0)
+                        continue;
+
+                    var materialGuid = ParseFirstMaterialGuid(body);
+                    if (!string.IsNullOrWhiteSpace(materialGuid))
+                    {
+                        materialGuidByGameObject[gameObjectId] = materialGuid;
+                    }
+                }
             }
 
             var worldCache = new Dictionary<long, TransformWorld>();
@@ -454,7 +577,7 @@ namespace AssetStudio.ModViewer.Services
                     Indices = meshTemplate.Indices,
                     Normals = meshTemplate.Normals,
                     UV = meshTemplate.UV,
-                    MaterialIndex = meshTemplate.MaterialIndex,
+                    MaterialIndex = ResolveMaterialIndex(gameObjectId, materialGuidByGameObject, pathnameByGuid, materialIndexByPath),
                     Position = world.Position,
                     Rotation = world.Rotation,
                     Scale = world.Scale
@@ -462,6 +585,19 @@ namespace AssetStudio.ModViewer.Services
             }
 
             return result;
+        }
+
+        private static int ResolveMaterialIndex(
+            long gameObjectId,
+            Dictionary<long, string> materialGuidByGameObject,
+            Dictionary<string, string> pathnameByGuid,
+            Dictionary<string, int> materialIndexByPath)
+        {
+            if (!materialGuidByGameObject.TryGetValue(gameObjectId, out var materialGuid))
+                return 0;
+            if (!pathnameByGuid.TryGetValue(materialGuid, out var materialPath))
+                return 0;
+            return materialIndexByPath.TryGetValue(materialPath, out var materialIndex) ? materialIndex : 0;
         }
 
         private static TransformWorld? ComputeWorldTransform(
@@ -558,6 +694,104 @@ namespace AssetStudio.ModViewer.Services
         {
             var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{{32}})", RegexOptions.Multiline);
             return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static string? ParseFirstMaterialGuid(string body)
+        {
+            var match = Regex.Match(
+                body,
+                @"^\s*-\s*\{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{32})",
+                RegexOptions.Multiline);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static string? ParseTextureGuid(string yaml, string key)
+        {
+            var match = Regex.Match(
+                yaml,
+                $@"^\s*-\s*{Regex.Escape(key)}:\s*\{{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{{32}})",
+                RegexOptions.Multiline);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static float[]? ParseColor(string yaml, string key)
+        {
+            var match = Regex.Match(
+                yaml,
+                $@"^\s*-\s*{Regex.Escape(key)}:\s*\{{r:\s*([^,]+),\s*g:\s*([^,]+),\s*b:\s*([^,]+),\s*a:\s*([^\}}]+)\}}",
+                RegexOptions.Multiline);
+            if (!match.Success)
+                return null;
+
+            return new[]
+            {
+                ParseFloat(match.Groups[1].Value, 1f),
+                ParseFloat(match.Groups[2].Value, 1f),
+                ParseFloat(match.Groups[3].Value, 1f),
+                ParseFloat(match.Groups[4].Value, 1f)
+            };
+        }
+
+        private static float ParseFloatProperty(string yaml, string key, float fallback)
+        {
+            var match = Regex.Match(
+                yaml,
+                $@"^\s*-\s*{Regex.Escape(key)}:\s*([^\r\n]+)$",
+                RegexOptions.Multiline);
+            return match.Success ? ParseFloat(match.Groups[1].Value, fallback) : fallback;
+        }
+
+        private static string? DetectImageMimeType(byte[] data)
+        {
+            if (data.Length >= 8 &&
+                data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
+                data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
+                return "image/png";
+
+            if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
+                return "image/jpeg";
+
+            return null;
+        }
+
+        private static (int width, int height) TryReadImageSize(byte[] data, string mime)
+        {
+            if (mime == "image/png" && data.Length >= 24)
+            {
+                var width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+                var height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
+                return (Math.Max(0, width), Math.Max(0, height));
+            }
+
+            if (mime == "image/jpeg")
+            {
+                int i = 2;
+                while (i + 9 < data.Length)
+                {
+                    if (data[i] != 0xFF)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    var marker = data[i + 1];
+                    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2)
+                    {
+                        var height = (data[i + 5] << 8) + data[i + 6];
+                        var width = (data[i + 7] << 8) + data[i + 8];
+                        return (Math.Max(0, width), Math.Max(0, height));
+                    }
+
+                    if (i + 3 >= data.Length)
+                        break;
+                    var segmentLen = (data[i + 2] << 8) + data[i + 3];
+                    if (segmentLen <= 0)
+                        break;
+                    i += 2 + segmentLen;
+                }
+            }
+
+            return (0, 0);
         }
 
         private static float[] ParseVector3(string body, string fieldName, float[]? fallback = null)
