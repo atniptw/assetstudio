@@ -28,5 +28,10 @@
   </ItemGroup>
   <ItemGroup Condition="'$(WasmBuild)'=='true'">
     <Compile Remove="ModelExporter.cs" />
+    <Compile Remove="ShaderConverter.cs" />
+    <Compile Remove="ACL/ACL.cs" />
+    <Compile Remove="ACL/ACLExtensions.cs" />
+    <Compile Remove="AudioClipConverter.cs" />
+    <Compile Remove="FMOD Studio API/*" />
   </ItemGroup>
 </Project>

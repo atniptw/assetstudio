@@ -905,6 +905,7 @@ namespace AssetStudio
                     var m_ClipBindingConstant = animationClip.m_ClipBindingConstant ?? m_Clip.ConvertValueArrayToGenericBinding();
                     var m_ACLClip = m_Clip.m_ACLClip;
                     var aclCount = m_ACLClip.CurveCount;
+#if !ASSETSTUDIO_WASM
                     if (m_ACLClip.IsSet && !options.game.Type.IsSRGroup())
                     {
                         m_ACLClip.Process(options.game, out var values, out var times);
@@ -920,6 +921,7 @@ namespace AssetStudio
 
                         }
                     }
+#endif
                     for (int frameIndex = 1; frameIndex < streamedFrames.Count - 1; frameIndex++)
                     {
                         var frame = streamedFrames[frameIndex];
@@ -946,6 +948,7 @@ namespace AssetStudio
                             ReadCurveData(iAnim, m_ClipBindingConstant, (int)index, time, m_DenseClip.m_SampleArray, (int)frameOffset, ref curveIndex);
                         }
                     }
+#if !ASSETSTUDIO_WASM
                     if (m_ACLClip.IsSet && options.game.Type.IsSRGroup())
                     {
                         m_ACLClip.Process(options.game, out var values, out var times);
@@ -961,6 +964,7 @@ namespace AssetStudio
 
                         }
                     }
+#endif
                     if (m_Clip.m_ConstantClip != null)
                     {
                         var m_ConstantClip = m_Clip.m_ConstantClip;

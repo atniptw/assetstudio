@@ -1,0 +1,102 @@
+﻿@page "/"
+@inject IJSRuntime JS
+@inject DiagnosticsService Diagnostics
+@inject BasePackageLoader Loader
+@implements IDisposable
+
+<PageTitle>ModViewer</PageTitle>
+
+<div class="viewer-layout">
+	<section class="diagnostics-panel">
+		<header class="panel-header">
+			<div>
+				<h1>ModViewer</h1>
+				<p class="subtle">Base avatar bootstrap + diagnostics</p>
+			</div>
+			<button class="btn btn-sm btn-outline-light" @onclick="ReloadAsync">Reload</button>
+		</header>
+
+		<div class="panel-body">
+			<div class="diag-summary">
+				<div>
+					<span class="label">Package</span>
+					<span class="value">@Loader.PackageStatus</span>
+				</div>
+				<div>
+					<span class="label">Bytes</span>
+					<span class="value">@Loader.PackageBytesLength</span>
+				</div>
+				<div>
+					<span class="label">Elapsed</span>
+					<span class="value">@Loader.LastElapsedMs ms</span>
+				</div>
+			</div>
+
+			<div class="diag-log">
+				@if (Diagnostics.Entries.Count == 0)
+				{
+					<div class="log-row">
+						<span class="time">--:--:--</span>
+						<span class="level">info</span>
+						<span class="message">Waiting for package load...</span>
+					</div>
+				}
+				else
+				{
+					@foreach (var entry in Diagnostics.Entries)
+					{
+						<div class="log-row log-@entry.Level">
+							<span class="time">@entry.Timestamp.ToString("HH:mm:ss")</span>
+							<span class="level">@entry.Level</span>
+							<span class="message">@entry.Message</span>
+						</div>
+					}
+				}
+			</div>
+		</div>
+	</section>
+
+	<section class="viewer-panel">
+		<div class="viewer-header">
+			<h2>Avatar Preview</h2>
+			<span class="subtle">three.js viewport</span>
+		</div>
+		<canvas id="viewer-canvas" class="viewer-canvas"></canvas>
+	</section>
+</div>
+
+@code {
+	private bool initialized;
+
+	protected override async Task OnAfterRenderAsync(bool firstRender)
+	{
+		if (!firstRender || initialized)
+		{
+			return;
+		}
+
+		initialized = true;
+		Diagnostics.OnChanged += HandleDiagnosticsChanged;
+		await JS.InvokeVoidAsync("modViewer.init", "viewer-canvas");
+		
+		// Set JS runtime for asset rendering
+		Loader.SetJSRuntime(JS);
+		await Loader.LoadAsync();
+	}
+
+	private async Task ReloadAsync()
+	{
+		Diagnostics.Clear();
+		await Loader.LoadAsync();
+	}
+
+	private void HandleDiagnosticsChanged()
+	{
+		InvokeAsync(StateHasChanged);
+	}
+
+	public void Dispose()
+	{
+		Diagnostics.OnChanged -= HandleDiagnosticsChanged;
+	}
+}

@@ -59,16 +59,20 @@ namespace AssetStudio
 
             if (m_Clip.m_ACLClip.IsSet && !game.Type.IsSRGroup())
             {
+#if !ASSETSTUDIO_WASM
                 var lastACLFrame = ProcessACLClip(m_Clip, bindings, tos);
                 lastFrame = Math.Max(lastFrame, lastACLFrame);
+#endif
                 animationClip.m_Compressed = false;
             }
             ProcessStreams(streamedFrames, bindings, tos, m_Clip.m_DenseClip.m_SampleRate);
             ProcessDenses(m_Clip, bindings, tos);
             if (m_Clip.m_ACLClip.IsSet && game.Type.IsSRGroup())
             {
+#if !ASSETSTUDIO_WASM
                 var lastACLFrame = ProcessACLClip(m_Clip, bindings, tos);
                 lastFrame = Math.Max(lastFrame, lastACLFrame);
+#endif
                 animationClip.m_Compressed = false;
             }
             if (m_Clip.m_ConstantClip != null)
@@ -183,6 +187,7 @@ namespace AssetStudio
                 }
             }
         }
+#if !ASSETSTUDIO_WASM
         private float ProcessACLClip(Clip clip, AnimationClipBindingConstant bindings, Dictionary<uint, string> tos)
         {
             var acl = clip.m_ACLClip;
@@ -222,6 +227,7 @@ namespace AssetStudio
 
             return times[frameCount - 1];
         }
+#endif
         private void ProcessConstant(Clip clip, AnimationClipBindingConstant bindings, Dictionary<uint, string> tos, float lastFrame)
         {
             var constant = clip.m_ConstantClip;
