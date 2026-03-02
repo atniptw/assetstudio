@@ -363,3 +363,6 @@ yarn-error.log*
 .playwright/
 .playwright-cli/
 playwright-report/
+
+# Unitypackage temporary backups
+*.unitypackage.bak-*
