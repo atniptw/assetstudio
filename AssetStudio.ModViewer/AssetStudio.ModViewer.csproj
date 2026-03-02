@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../AssetStudio/AssetStudio.csproj" />
+    <ProjectReference Include="../AssetStudio.Extraction.Core/AssetStudio.Extraction.Core.csproj" />
     <ProjectReference Include="../AssetStudio.Utility/AssetStudio.Utility.csproj" />
   </ItemGroup>
 

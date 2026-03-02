@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Globalization;
+using AssetStudio.Extraction.Core.Services;
 
 namespace AssetStudio.ModViewer.Services
 {
@@ -304,7 +305,8 @@ namespace AssetStudio.ModViewer.Services
                 if (avatarData.Meshes.Count == 0)
                 {
                     var yamlMeshesByPath = ExtractYamlMeshes(assetFiles);
-                    var materialIndexByPath = ExtractYamlMaterialsAndTextures(assetFiles, pathnameByGuid, avatarData);
+                    var parsedTexturesByPath = BuildParsedTextureLookup(manager);
+                    var materialIndexByPath = ExtractYamlMaterialsAndTextures(assetFiles, pathnameByGuid, avatarData, parsedTexturesByPath);
                     var placedMeshes = ExtractPlacedYamlMeshes(assetFiles, pathnameByGuid, yamlMeshesByPath, materialIndexByPath);
 
                     if (placedMeshes.Count > 0)
@@ -334,7 +336,8 @@ namespace AssetStudio.ModViewer.Services
         private Dictionary<string, int> ExtractYamlMaterialsAndTextures(
             Dictionary<string, byte[]> assetFiles,
             Dictionary<string, string> pathnameByGuid,
-            Models.AvatarData avatarData)
+            Models.AvatarData avatarData,
+            Dictionary<string, Texture2D> parsedTexturesByPath)
         {
             var materialIndexByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var textureIndexByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -345,6 +348,7 @@ namespace AssetStudio.ModViewer.Services
             int missingGuidRefs = 0;
             int missingPathMappings = 0;
             int missingAssetEntries = 0;
+            int resolvedViaParsedTextures = 0;
 
             foreach (var asset in assetFiles)
             {
@@ -371,12 +375,14 @@ namespace AssetStudio.ModViewer.Services
                         assetFiles,
                         textureIndexByPath,
                         avatarData,
+                        parsedTexturesByPath,
                         ref totalTextureBytes,
                         ref skippedByCap,
                         ref decodeFailures,
                         ref missingGuidRefs,
                         ref missingPathMappings,
                         ref missingAssetEntries,
+                        ref resolvedViaParsedTextures,
                         "_BaseMap",
                         "_MainTex",
                         "_DiffuseMap");
@@ -387,12 +393,14 @@ namespace AssetStudio.ModViewer.Services
                         assetFiles,
                         textureIndexByPath,
                         avatarData,
+                        parsedTexturesByPath,
                         ref totalTextureBytes,
                         ref skippedByCap,
                         ref decodeFailures,
                         ref missingGuidRefs,
                         ref missingPathMappings,
                         ref missingAssetEntries,
+                        ref resolvedViaParsedTextures,
                         "_BumpMap",
                         "_NormalMap");
 
@@ -407,11 +415,13 @@ namespace AssetStudio.ModViewer.Services
                                 assetFiles,
                                 textureIndexByPath,
                                 avatarData,
+                                parsedTexturesByPath,
                                 ref totalTextureBytes,
                                 ref skippedByCap,
                                 ref decodeFailures,
                                 ref missingPathMappings,
-                                ref missingAssetEntries);
+                                ref missingAssetEntries,
+                                ref resolvedViaParsedTextures);
                         }
                     }
 
@@ -426,11 +436,13 @@ namespace AssetStudio.ModViewer.Services
                                 assetFiles,
                                 textureIndexByPath,
                                 avatarData,
+                                parsedTexturesByPath,
                                 ref totalTextureBytes,
                                 ref skippedByCap,
                                 ref decodeFailures,
                                 ref missingPathMappings,
-                                ref missingAssetEntries);
+                                ref missingAssetEntries,
+                                ref resolvedViaParsedTextures);
                         }
                     }
 
@@ -462,6 +474,10 @@ namespace AssetStudio.ModViewer.Services
             {
                 diagnostics.Add("warn", $"Failed to decode {decodeFailures} textures (unsupported format)");
             }
+            if (resolvedViaParsedTextures > 0)
+            {
+                diagnostics.Add("info", $"Resolved {resolvedViaParsedTextures} YAML texture refs via parsed Texture2D decode");
+            }
             if (missingGuidRefs > 0 || missingPathMappings > 0 || missingAssetEntries > 0)
             {
                 diagnostics.Add(
@@ -478,12 +494,14 @@ namespace AssetStudio.ModViewer.Services
             Dictionary<string, byte[]> assetFiles,
             Dictionary<string, int> textureIndexByPath,
             Models.AvatarData avatarData,
+            Dictionary<string, Texture2D> parsedTexturesByPath,
             ref int totalTextureBytes,
             ref int skippedByCap,
             ref int decodeFailures,
             ref int missingGuidRefs,
             ref int missingPathMappings,
             ref int missingAssetEntries,
+            ref int resolvedViaParsedTextures,
             params string[] keys)
         {
             if (keys == null || keys.Length == 0)
@@ -503,11 +521,13 @@ namespace AssetStudio.ModViewer.Services
                     assetFiles,
                     textureIndexByPath,
                     avatarData,
+                    parsedTexturesByPath,
                     ref totalTextureBytes,
                     ref skippedByCap,
                     ref decodeFailures,
                     ref missingPathMappings,
-                    ref missingAssetEntries);
+                    ref missingAssetEntries,
+                    ref resolvedViaParsedTextures);
                 if (resolvedIndex >= 0)
                     return resolvedIndex;
             }
@@ -521,11 +541,13 @@ namespace AssetStudio.ModViewer.Services
             Dictionary<string, byte[]> assetFiles,
             Dictionary<string, int> textureIndexByPath,
             Models.AvatarData avatarData,
+            Dictionary<string, Texture2D> parsedTexturesByPath,
             ref int totalTextureBytes,
             ref int skippedByCap,
             ref int decodeFailures,
             ref int missingPathMappings,
-            ref int missingAssetEntries)
+            ref int missingAssetEntries,
+            ref int resolvedViaParsedTextures)
         {
             if (string.IsNullOrWhiteSpace(guid))
                 return -1;
@@ -536,14 +558,36 @@ namespace AssetStudio.ModViewer.Services
                 return -1;
             }
 
+            if (textureIndexByPath.TryGetValue(texturePath, out var existingIndex))
+                return existingIndex;
+
+            var normalizedTexturePath = NormalizeAssetPathKey(texturePath);
+            if (parsedTexturesByPath != null && parsedTexturesByPath.TryGetValue(normalizedTexturePath, out var parsedTexture))
+            {
+                if (TryCreateTextureData(parsedTexture, out var parsedTextureData, out var parsedEncodedSize))
+                {
+                    if (avatarData.Textures.Count >= MaxTextureCount ||
+                        parsedEncodedSize > MaxTextureBytesPerTexture ||
+                        totalTextureBytes + parsedEncodedSize > MaxTextureBytesTotal)
+                    {
+                        skippedByCap++;
+                        return -1;
+                    }
+
+                    var parsedIndex = avatarData.Textures.Count;
+                    avatarData.Textures.Add(parsedTextureData);
+                    textureIndexByPath[texturePath] = parsedIndex;
+                    totalTextureBytes += parsedEncodedSize;
+                    resolvedViaParsedTextures++;
+                    return parsedIndex;
+                }
+            }
+
             if (!assetFiles.TryGetValue(texturePath, out var textureBytes))
             {
                 missingAssetEntries++;
                 return -1;
             }
-
-            if (textureIndexByPath.TryGetValue(texturePath, out var existingIndex))
-                return existingIndex;
 
             if (avatarData.Textures.Count >= MaxTextureCount ||
                 textureBytes.Length > MaxTextureBytesPerTexture ||
@@ -574,6 +618,39 @@ namespace AssetStudio.ModViewer.Services
             textureIndexByPath[texturePath] = index;
             totalTextureBytes += textureBytes.Length;
             return index;
+        }
+
+        private Dictionary<string, Texture2D> BuildParsedTextureLookup(AssetsManager manager)
+        {
+            var map = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+            if (manager?.assetsFileList == null)
+                return map;
+
+            var textures = manager.assetsFileList
+                .SelectMany(f => f.Objects.OfType<Texture2D>() ?? new List<Texture2D>())
+                .ToList();
+
+            foreach (var texture in textures)
+            {
+                if (texture?.assetsFile?.fileName == null)
+                    continue;
+
+                var normalizedPath = NormalizeAssetPathKey(texture.assetsFile.fileName);
+                if (!map.ContainsKey(normalizedPath))
+                {
+                    map[normalizedPath] = texture;
+                }
+            }
+
+            return map;
+        }
+
+        private static string NormalizeAssetPathKey(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return string.Empty;
+
+            return path.Replace('\\', '/').Trim().ToLowerInvariant();
         }
 
         private static Dictionary<string, string> ParseYamlTexEnvGuidMap(string yaml)
@@ -1425,73 +1502,29 @@ namespace AssetStudio.ModViewer.Services
             textureData = null;
             encodedSize = 0;
 
-            if (texture == null || texture.m_Width <= 0 || texture.m_Height <= 0)
+            if (!StableTextureEncoder.TryEncodePngDataUrl(texture, out var encoded) || encoded == null)
                 return false;
 
-            try
+            textureData = new Models.AvatarData.TextureData
             {
-                using var stream = texture.ConvertToStream(ImageFormat.Png, true);
-                if (stream == null || stream.Length <= 0)
-                    return false;
-
-                var bytes = stream.ToArray();
-                encodedSize = bytes.Length;
-
-                textureData = new Models.AvatarData.TextureData
-                {
-                    Name = texture.Name ?? "Texture",
-                    Width = texture.m_Width,
-                    Height = texture.m_Height,
-                    Format = "image/png",
-                    DataUrl = $"data:image/png;base64,{Convert.ToBase64String(bytes)}"
-                };
-
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+                Name = encoded.Name,
+                Width = encoded.Width,
+                Height = encoded.Height,
+                Format = encoded.Format,
+                DataUrl = encoded.DataUrl
+            };
+            encodedSize = encoded.EncodedSize;
+            return true;
         }
 
         private static float[] GetMaterialColor(Material material, params string[] keys)
         {
-            if (material?.m_SavedProperties?.m_Colors == null || keys == null || keys.Length == 0)
-                return null;
-
-            foreach (var key in keys)
-            {
-                var colorEntry = material.m_SavedProperties.m_Colors
-                    .FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
-                if (string.IsNullOrWhiteSpace(colorEntry.Key))
-                    continue;
-
-                return new[]
-                {
-                    colorEntry.Value.R,
-                    colorEntry.Value.G,
-                    colorEntry.Value.B,
-                    colorEntry.Value.A
-                };
-            }
-
-            return null;
+            return StableMaterialPropertyReader.GetColor(material, keys);
         }
 
         private static float GetMaterialFloat(Material material, float fallback, params string[] keys)
         {
-            if (material?.m_SavedProperties?.m_Floats == null || keys == null || keys.Length == 0)
-                return fallback;
-
-            foreach (var key in keys)
-            {
-                var floatEntry = material.m_SavedProperties.m_Floats
-                    .FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(floatEntry.Key))
-                    return floatEntry.Value;
-            }
-
-            return fallback;
+            return StableMaterialPropertyReader.GetFloat(material, fallback, keys);
         }
 
         private static string GetObjectKey(AssetStudio.Object obj)
