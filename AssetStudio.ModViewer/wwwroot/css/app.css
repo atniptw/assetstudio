@@ -4,6 +4,7 @@ html, body {
     color: #e4e6eb;
     height: 100%;
     margin: 0;
+    overflow-y: auto;
 }
 
 h1:focus {
@@ -52,13 +53,17 @@ a, .btn-link {
 }
 
 .app-shell {
-    min-height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
 }
 
 .viewer-layout {
     display: grid;
     grid-template-columns: minmax(280px, 340px) 1fr;
-    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .diagnostics-panel {
@@ -68,6 +73,9 @@ a, .btn-link {
     flex-direction: column;
     padding: 1.5rem;
     gap: 1rem;
+    min-height: 0;
+    overflow: hidden;
+    box-sizing: border-box;
 }
 
 .panel-header {
@@ -155,6 +163,7 @@ a, .btn-link {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
     background: radial-gradient(circle at 20% 20%, #1a2030, #0b0f16 60%);
 }
 

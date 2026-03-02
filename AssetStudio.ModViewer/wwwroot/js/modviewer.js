@@ -155,6 +155,22 @@
 
                         const mesh = new THREE.Mesh(geometry, material);
                         mesh.name = meshData.name || `Mesh_${idx}`;
+
+                        if (Array.isArray(meshData.position) && meshData.position.length >= 3) {
+                            mesh.position.set(meshData.position[0], meshData.position[1], meshData.position[2]);
+                        }
+                        if (Array.isArray(meshData.rotation) && meshData.rotation.length >= 4) {
+                            mesh.quaternion.set(
+                                meshData.rotation[0],
+                                meshData.rotation[1],
+                                meshData.rotation[2],
+                                meshData.rotation[3]
+                            );
+                        }
+                        if (Array.isArray(meshData.scale) && meshData.scale.length >= 3) {
+                            mesh.scale.set(meshData.scale[0], meshData.scale[1], meshData.scale[2]);
+                        }
+
                         group.add(mesh);
 
                         meshCount++;
@@ -173,8 +189,26 @@
                 group.position.sub(center);
                 group.scale.multiplyScalar(scale);
 
+                const framedBox = new THREE.Box3().setFromObject(group);
+                const framedCenter = framedBox.getCenter(new THREE.Vector3());
+                const framedSize = framedBox.getSize(new THREE.Vector3());
+
                 // Add to scene
                 state.scene.add(group);
+
+                if (state.camera) {
+                    const fov = state.camera.fov * (Math.PI / 180);
+                    const fitHeightDistance = framedSize.y / (2 * Math.tan(fov / 2));
+                    const fitWidthDistance = (framedSize.x / state.camera.aspect) / (2 * Math.tan(fov / 2));
+                    const distance = Math.max(fitHeightDistance, fitWidthDistance, framedSize.z) * 1.35;
+
+                    state.camera.position.set(
+                        framedCenter.x,
+                        framedCenter.y + framedSize.y * 0.15,
+                        framedCenter.z + distance
+                    );
+                    state.camera.lookAt(framedCenter);
+                }
 
                 console.log(`Rendered ${meshCount} meshes`);
             }

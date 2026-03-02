@@ -16,6 +16,9 @@ namespace AssetStudio.ModViewer.Models
             public float[] Normals { get; set; }
             public float[] UV { get; set; }
             public int MaterialIndex { get; set; }
+            public float[] Position { get; set; } = { 0f, 0f, 0f };
+            public float[] Rotation { get; set; } = { 0f, 0f, 0f, 1f };
+            public float[] Scale { get; set; } = { 1f, 1f, 1f };
         }
 
         public class TextureData

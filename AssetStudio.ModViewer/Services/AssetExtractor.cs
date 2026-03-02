@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Globalization;
 
 namespace AssetStudio.ModViewer.Services
 {
@@ -97,7 +98,7 @@ namespace AssetStudio.ModViewer.Services
                 // Load assets using AssetsManager
                 if (assetFiles.Count > 0)
                 {
-                    await LoadAssetsIntoAvatarData(assetFiles, avatarData);
+                    await LoadAssetsIntoAvatarData(assetFiles, pathnameByGuid, avatarData);
                 }
                 else
                 {
@@ -236,7 +237,7 @@ namespace AssetStudio.ModViewer.Services
             return ms.ToArray();
         }
 
-        private async Task LoadAssetsIntoAvatarData(Dictionary<string, byte[]> assetFiles, Models.AvatarData avatarData)
+        private async Task LoadAssetsIntoAvatarData(Dictionary<string, byte[]> assetFiles, Dictionary<string, string> pathnameByGuid, Models.AvatarData avatarData)
         {
             try
             {
@@ -299,11 +300,21 @@ namespace AssetStudio.ModViewer.Services
 
                 if (avatarData.Meshes.Count == 0)
                 {
-                    var yamlMeshes = ExtractYamlMeshes(assetFiles);
-                    avatarData.Meshes.AddRange(yamlMeshes);
-                    if (yamlMeshes.Count > 0)
+                    var yamlMeshesByPath = ExtractYamlMeshes(assetFiles);
+                    var placedMeshes = ExtractPlacedYamlMeshes(assetFiles, pathnameByGuid, yamlMeshesByPath);
+
+                    if (placedMeshes.Count > 0)
                     {
-                        diagnostics.Add("info", $"Fallback YAML mesh parser extracted {yamlMeshes.Count} meshes");
+                        avatarData.Meshes.AddRange(placedMeshes);
+                        diagnostics.Add("info", $"Fallback YAML mesh parser extracted {placedMeshes.Count} meshes with prefab transforms");
+                    }
+                    else
+                    {
+                        avatarData.Meshes.AddRange(yamlMeshesByPath.Values);
+                        if (yamlMeshesByPath.Count > 0)
+                        {
+                            diagnostics.Add("info", $"Fallback YAML mesh parser extracted {yamlMeshesByPath.Count} meshes");
+                        }
                     }
                 }
             }
@@ -314,9 +325,9 @@ namespace AssetStudio.ModViewer.Services
             }
         }
 
-        private List<Models.AvatarData.MeshData> ExtractYamlMeshes(Dictionary<string, byte[]> assetFiles)
+        private Dictionary<string, Models.AvatarData.MeshData> ExtractYamlMeshes(Dictionary<string, byte[]> assetFiles)
         {
-            var meshes = new List<Models.AvatarData.MeshData>();
+            var meshes = new Dictionary<string, Models.AvatarData.MeshData>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var asset in assetFiles)
             {
@@ -337,7 +348,7 @@ namespace AssetStudio.ModViewer.Services
                     var mesh = ParseYamlMesh(path, text);
                     if (mesh != null && mesh.Vertices.Length >= 9 && mesh.Indices.Length >= 3)
                     {
-                        meshes.Add(mesh);
+                        meshes[path] = mesh;
                     }
                 }
                 catch (Exception ex)
@@ -347,6 +358,243 @@ namespace AssetStudio.ModViewer.Services
             }
 
             return meshes;
+        }
+
+        private List<Models.AvatarData.MeshData> ExtractPlacedYamlMeshes(
+            Dictionary<string, byte[]> assetFiles,
+            Dictionary<string, string> pathnameByGuid,
+            Dictionary<string, Models.AvatarData.MeshData> yamlMeshesByPath)
+        {
+            var prefabEntry = assetFiles
+                .FirstOrDefault(kvp => kvp.Key.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
+            if (prefabEntry.Value == null || prefabEntry.Value.Length == 0)
+                return new List<Models.AvatarData.MeshData>();
+
+            var prefabYaml = Encoding.UTF8.GetString(prefabEntry.Value);
+            var sections = Regex.Matches(prefabYaml, @"^--- !u!(\d+) &(\d+)\r?\n([\s\S]*?)(?=^--- !u!|\z)", RegexOptions.Multiline);
+
+            var gameObjectNameById = new Dictionary<long, string>();
+            var transformById = new Dictionary<long, TransformState>();
+            var transformIdByGameObject = new Dictionary<long, long>();
+            var meshGuidByGameObject = new Dictionary<long, string>();
+
+            foreach (Match section in sections)
+            {
+                if (!int.TryParse(section.Groups[1].Value, out var classId))
+                    continue;
+                if (!long.TryParse(section.Groups[2].Value, out var objectId))
+                    continue;
+
+                var body = section.Groups[3].Value;
+
+                if (classId == 1)
+                {
+                    var goName = MatchValue(body, @"^\s*m_Name:\s*(.+)$");
+                    if (!string.IsNullOrWhiteSpace(goName))
+                    {
+                        gameObjectNameById[objectId] = goName;
+                    }
+                }
+                else if (classId == 4)
+                {
+                    var gameObjectId = ParseFileId(body, "m_GameObject");
+                    if (gameObjectId == 0)
+                        continue;
+
+                    var parentTransformId = ParseFileId(body, "m_Father");
+                    var localPosition = ParseVector3(body, "m_LocalPosition");
+                    var localRotation = ParseQuaternion(body, "m_LocalRotation");
+                    var localScale = ParseVector3(body, "m_LocalScale", new[] { 1f, 1f, 1f });
+
+                    transformById[objectId] = new TransformState
+                    {
+                        TransformId = objectId,
+                        GameObjectId = gameObjectId,
+                        ParentTransformId = parentTransformId,
+                        LocalPosition = localPosition,
+                        LocalRotation = localRotation,
+                        LocalScale = localScale
+                    };
+
+                    transformIdByGameObject[gameObjectId] = objectId;
+                }
+                else if (classId == 33)
+                {
+                    var gameObjectId = ParseFileId(body, "m_GameObject");
+                    var meshGuid = ParseGuid(body, "m_Mesh");
+                    if (gameObjectId != 0 && !string.IsNullOrWhiteSpace(meshGuid))
+                    {
+                        meshGuidByGameObject[gameObjectId] = meshGuid;
+                    }
+                }
+            }
+
+            var worldCache = new Dictionary<long, TransformWorld>();
+            var result = new List<Models.AvatarData.MeshData>();
+
+            foreach (var meshBinding in meshGuidByGameObject)
+            {
+                var gameObjectId = meshBinding.Key;
+                var meshGuid = meshBinding.Value;
+                if (!pathnameByGuid.TryGetValue(meshGuid, out var meshPath))
+                    continue;
+                if (!yamlMeshesByPath.TryGetValue(meshPath, out var meshTemplate))
+                    continue;
+                if (!transformIdByGameObject.TryGetValue(gameObjectId, out var transformId))
+                    continue;
+
+                var world = ComputeWorldTransform(transformId, transformById, worldCache);
+                if (world == null)
+                    continue;
+
+                result.Add(new Models.AvatarData.MeshData
+                {
+                    Name = gameObjectNameById.TryGetValue(gameObjectId, out var goName) ? goName : meshTemplate.Name,
+                    Vertices = meshTemplate.Vertices,
+                    Indices = meshTemplate.Indices,
+                    Normals = meshTemplate.Normals,
+                    UV = meshTemplate.UV,
+                    MaterialIndex = meshTemplate.MaterialIndex,
+                    Position = world.Position,
+                    Rotation = world.Rotation,
+                    Scale = world.Scale
+                });
+            }
+
+            return result;
+        }
+
+        private static TransformWorld? ComputeWorldTransform(
+            long transformId,
+            Dictionary<long, TransformState> transformById,
+            Dictionary<long, TransformWorld> cache)
+        {
+            if (cache.TryGetValue(transformId, out var cached))
+                return cached;
+            if (!transformById.TryGetValue(transformId, out var state))
+                return null;
+
+            TransformWorld world;
+            if (state.ParentTransformId != 0 && transformById.ContainsKey(state.ParentTransformId))
+            {
+                var parentWorld = ComputeWorldTransform(state.ParentTransformId, transformById, cache);
+                if (parentWorld == null)
+                    return null;
+
+                var rotatedLocal = RotateVectorByQuaternion(state.LocalPosition, parentWorld.Rotation);
+                world = new TransformWorld
+                {
+                    Position = new[]
+                    {
+                        parentWorld.Position[0] + rotatedLocal[0],
+                        parentWorld.Position[1] + rotatedLocal[1],
+                        parentWorld.Position[2] + rotatedLocal[2]
+                    },
+                    Rotation = MultiplyQuaternions(parentWorld.Rotation, state.LocalRotation),
+                    Scale = new[]
+                    {
+                        parentWorld.Scale[0] * state.LocalScale[0],
+                        parentWorld.Scale[1] * state.LocalScale[1],
+                        parentWorld.Scale[2] * state.LocalScale[2]
+                    }
+                };
+            }
+            else
+            {
+                world = new TransformWorld
+                {
+                    Position = state.LocalPosition,
+                    Rotation = state.LocalRotation,
+                    Scale = state.LocalScale
+                };
+            }
+
+            cache[transformId] = world;
+            return world;
+        }
+
+        private static float[] RotateVectorByQuaternion(float[] vector, float[] quaternion)
+        {
+            var x = vector[0];
+            var y = vector[1];
+            var z = vector[2];
+
+            var qx = quaternion[0];
+            var qy = quaternion[1];
+            var qz = quaternion[2];
+            var qw = quaternion[3];
+
+            var ix = qw * x + qy * z - qz * y;
+            var iy = qw * y + qz * x - qx * z;
+            var iz = qw * z + qx * y - qy * x;
+            var iw = -qx * x - qy * y - qz * z;
+
+            return new[]
+            {
+                ix * qw + iw * -qx + iy * -qz - iz * -qy,
+                iy * qw + iw * -qy + iz * -qx - ix * -qz,
+                iz * qw + iw * -qz + ix * -qy - iy * -qx
+            };
+        }
+
+        private static float[] MultiplyQuaternions(float[] a, float[] b)
+        {
+            return new[]
+            {
+                a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+            };
+        }
+
+        private static long ParseFileId(string body, string fieldName)
+        {
+            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{fileID:\s*(-?\d+)", RegexOptions.Multiline);
+            return match.Success && long.TryParse(match.Groups[1].Value, out var fileId) ? fileId : 0;
+        }
+
+        private static string? ParseGuid(string body, string fieldName)
+        {
+            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{{32}})", RegexOptions.Multiline);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static float[] ParseVector3(string body, string fieldName, float[]? fallback = null)
+        {
+            fallback ??= new[] { 0f, 0f, 0f };
+            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^\}}]+)\}}", RegexOptions.Multiline);
+            if (!match.Success)
+                return fallback;
+
+            return new[]
+            {
+                ParseFloat(match.Groups[1].Value, fallback[0]),
+                ParseFloat(match.Groups[2].Value, fallback[1]),
+                ParseFloat(match.Groups[3].Value, fallback[2])
+            };
+        }
+
+        private static float[] ParseQuaternion(string body, string fieldName)
+        {
+            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^,]+),\s*w:\s*([^\}}]+)\}}", RegexOptions.Multiline);
+            if (!match.Success)
+                return new[] { 0f, 0f, 0f, 1f };
+
+            return new[]
+            {
+                ParseFloat(match.Groups[1].Value, 0f),
+                ParseFloat(match.Groups[2].Value, 0f),
+                ParseFloat(match.Groups[3].Value, 0f),
+                ParseFloat(match.Groups[4].Value, 1f)
+            };
+        }
+
+        private static float ParseFloat(string value, float fallback)
+        {
+            return float.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var result)
+                ? result
+                : fallback;
         }
 
         private Models.AvatarData.MeshData? ParseYamlMesh(string path, string yaml)
@@ -517,7 +765,10 @@ namespace AssetStudio.ModViewer.Services
                 Indices = mesh.m_Indices?.ToArray() ?? Array.Empty<uint>(),
                 Normals = mesh.m_Normals != null ? ConvertVectorArrayToFloatArray(mesh.m_Normals) : Array.Empty<float>(),
                 UV = mesh.m_UV0 != null ? ConvertVectorArrayToFloatArray(mesh.m_UV0) : Array.Empty<float>(),
-                MaterialIndex = 0
+                MaterialIndex = 0,
+                Position = new[] { 0f, 0f, 0f },
+                Rotation = new[] { 0f, 0f, 0f, 1f },
+                Scale = new[] { 1f, 1f, 1f }
             };
 
             return meshData;
@@ -608,6 +859,23 @@ namespace AssetStudio.ModViewer.Services
             }
 
             return Array.Empty<float>();
+        }
+
+        private sealed class TransformState
+        {
+            public long TransformId { get; init; }
+            public long GameObjectId { get; init; }
+            public long ParentTransformId { get; init; }
+            public required float[] LocalPosition { get; init; }
+            public required float[] LocalRotation { get; init; }
+            public required float[] LocalScale { get; init; }
+        }
+
+        private sealed class TransformWorld
+        {
+            public required float[] Position { get; init; }
+            public required float[] Rotation { get; init; }
+            public required float[] Scale { get; init; }
         }
 
         private sealed class UnityPackageEntry
