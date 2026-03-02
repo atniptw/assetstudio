@@ -87,6 +87,15 @@ Open `https://localhost:5001` in browser.
 
 ## Testing Strategy
 
+### Browser Automation Skills
+
+- Playwright command usage: [.github/skills/playwright/SKILL.md](.github/skills/playwright/SKILL.md)
+- ModViewer page verification checklist: [.github/skills/modviewer-page-checks/SKILL.md](.github/skills/modviewer-page-checks/SKILL.md)
+
+Use both skills together:
+1. Use the Playwright skill to open the app and capture screenshot/console/network artifacts.
+2. Use the ModViewer page-checks skill to decide pass/fail from diagnostics, status, and troubleshooting signals.
+
 ### Unit Tests
 
 Create `AssetStudio.ModViewer.Tests/AssetStudio.ModViewer.Tests.csproj`:

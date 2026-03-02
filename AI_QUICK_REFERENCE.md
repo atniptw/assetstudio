@@ -13,6 +13,8 @@
 - Build ModViewer with [ModViewer.sln](ModViewer.sln) and `dotnet build ModViewer.sln -c Release /p:WasmBuild=true`
 - WASM build excludes FBX/PInvoke; do not call FBX export or P/Invoke paths
 - `ASSETSTUDIO_WASM` is defined in WASM builds for conditional code paths
+- Browser automation mechanics: [.github/skills/playwright/SKILL.md](.github/skills/playwright/SKILL.md)
+- ModViewer page validation checklist: [.github/skills/modviewer-page-checks/SKILL.md](.github/skills/modviewer-page-checks/SKILL.md)
 
 ### What's Working
 - ✅ Unity 6000.0.58f2 texture loading and preview (tested with Marvel Snap)

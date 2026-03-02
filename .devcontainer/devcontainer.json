@@ -3,7 +3,10 @@
   "dockerFile": "Dockerfile",
   "context": "..",
   "features": {
-    "ghcr.io/devcontainers/features/git:1": {}
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    }
   },
   "customizations": {
     "vscode": {
@@ -12,8 +15,8 @@
         "ms-dotnettools.vscode-dotnet-runtime",
         "ms-vscode.makefile-tools",
         "ms-vscode.cpptools",
-        "visualstudioexptteam.vscodeintellicode",
-        "ms-dotnettools.csdevkit"
+        "ms-dotnettools.csdevkit",
+        "github.vscode-github-actions"
       ],
       "settings": {
         "omnisharp.enableRoslynAnalyzers": true,
@@ -26,7 +29,7 @@
       }
     }
   },
-  "postCreateCommand": "dotnet restore && dotnet build AssetStudio.sln",
+  "postCreateCommand": "dotnet restore && dotnet build AssetStudio.sln && npx @playwright/cli@latest install && npx @playwright/cli@latest install-browser",
   "remoteUser": "vscode",
   "remoteEnv": {
     "DOTNET_CLI_TELEMETRY_OPTOUT": "true"

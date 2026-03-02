@@ -140,6 +140,17 @@ Example: `git tag v2.4.0 && git push origin v2.4.0`
 
 ## Integration Points
 
+## Browser Validation Skills (ModViewer)
+
+When validating ModViewer in-browser behavior, use these skills in order:
+
+1. **Playwright mechanics only**: [.github/skills/playwright/SKILL.md](.github/skills/playwright/SKILL.md)
+2. **ModViewer page assertions/checklist**: [.github/skills/modviewer-page-checks/SKILL.md](.github/skills/modviewer-page-checks/SKILL.md)
+
+Keep responsibilities separated:
+- Playwright skill: how to run browser automation commands and collect artifacts
+- ModViewer checks skill: what to verify on page (console health, diagnostics, status, troubleshooting sections)
+
 **External Dependencies**:
 - **FBX Export**: `AssetStudio.FBXWrapper` → C++ native DLL (pinvoke)
 - **Compression**: 7zip, Brotli, LZ4 for bundle decompression
