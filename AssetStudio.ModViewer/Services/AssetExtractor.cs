@@ -9,9 +9,9 @@ namespace AssetStudio.ModViewer.Services
     public class AssetExtractor
     {
         private readonly DiagnosticsService diagnostics;
-        private readonly UnityPackageExtractionService extractionService;
+        private readonly IUnityPackageExtractionService extractionService;
 
-        public AssetExtractor(DiagnosticsService diagnostics, UnityPackageExtractionService extractionService)
+        public AssetExtractor(DiagnosticsService diagnostics, IUnityPackageExtractionService extractionService)
         {
             this.diagnostics = diagnostics;
             this.extractionService = extractionService;

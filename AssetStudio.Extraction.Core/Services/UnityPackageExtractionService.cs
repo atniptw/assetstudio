@@ -13,7 +13,7 @@ using AssetStudio.Extraction.Core.Models;
 
 namespace AssetStudio.Extraction.Core.Services
 {
-    public class UnityPackageExtractionService
+    public class UnityPackageExtractionService : IUnityPackageExtractionService
     {
         private readonly ExtractionConfigurationService extractionConfigurationService;
         private IExtractionLogger? logger;
