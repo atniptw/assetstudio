@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  assetstudio:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    image: assetstudio:dev
+    container_name: assetstudio-dev
+    volumes:
+      - ..:/workspace:cached
+      - /workspace/.git
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    environment:
+      - DOTNET_CLI_TELEMETRY_OPTOUT=true
