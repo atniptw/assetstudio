@@ -340,3 +340,21 @@ ASALocalRun/
 healthchecksdb
 /AssetStudioCLI/Properties/launchSettings.json
 /AssetStudioGUI/Properties/launchSettings.json
+
+# Blazor WASM specific
+/AssetStudio.ModViewer/Properties/launchSettings.json
+/AssetStudio.ModViewer/bin/
+/AssetStudio.ModViewer/obj/
+/AssetStudio.ModViewer/wwwroot/service-worker.js
+/AssetStudio.ModViewer/wwwroot/service-worker-assets.js.br
+/AssetStudio.ModViewer/wwwroot/service-worker-assets.js.gz
+
+# Node dependencies (if added later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Blazor WASM published output
+/AssetStudio.ModViewer/publish/
+/AssetStudio.ModViewer/wwwroot/dist/
