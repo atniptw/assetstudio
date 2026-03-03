@@ -105,6 +105,35 @@ a, .btn-link {
     margin-bottom: 0.75rem;
 }
 
+.hidden-file-input {
+    display: none;
+}
+
+.import-banner {
+    border: 1px solid #2a3447;
+    border-radius: 8px;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.8rem;
+}
+
+.import-banner.info {
+    border-color: #21402b;
+    background: #122016;
+    color: #bfe7ca;
+}
+
+.import-banner.warn {
+    border-color: #5a4a21;
+    background: #2b2412;
+    color: #f5d993;
+}
+
+.import-banner.error {
+    border-color: #4a2424;
+    background: #261617;
+    color: #ffb2b2;
+}
+
 .tab-row {
     display: flex;
     flex-wrap: wrap;
@@ -152,6 +181,16 @@ a, .btn-link {
 
 .asset-row:last-child {
     border-bottom: none;
+}
+
+.asset-tag {
+    margin-left: auto;
+    border: 1px solid #2a3447;
+    border-radius: 999px;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.7rem;
+    color: #a9bdd8;
+    text-transform: lowercase;
 }
 
 .asset-empty {

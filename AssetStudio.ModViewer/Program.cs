@@ -15,5 +15,7 @@ builder.Services.AddScoped<IUnityPackageExtractionService, UnityPackageExtractio
 builder.Services.AddScoped<DiagnosticsService>();
 builder.Services.AddScoped<AssetExtractor>();
 builder.Services.AddScoped<BasePackageLoader>();
+builder.Services.AddScoped<ModImportService>();
+builder.Services.AddScoped<ModStorageService>();
 
 await builder.Build().RunAsync();

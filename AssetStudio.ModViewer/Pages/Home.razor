@@ -2,7 +2,12 @@
 @inject IJSRuntime JS
 @inject DiagnosticsService Diagnostics
 @inject BasePackageLoader Loader
+@inject ModImportService ModImport
+@inject ModStorageService ModStorage
 @implements IDisposable
+@using System.IO
+@using AssetStudio.ModViewer.Models
+@using Microsoft.AspNetCore.Components.Forms
 
 <PageTitle>ModViewer</PageTitle>
 
@@ -18,7 +23,13 @@
 	<div class="viewer-layout">
 		<section class="left-panel">
 
-			<button class="btn btn-outline-light import-btn" @onclick="ImportModPlaceholderAsync">Import Mod</button>
+			<button class="btn btn-outline-light import-btn" @onclick="OpenImportPickerAsync">Import Mod</button>
+			<InputFile id="mod-zip-input" class="hidden-file-input" accept=".zip,application/zip" OnChange="HandleModZipSelectedAsync" />
+
+			@if (!string.IsNullOrWhiteSpace(ImportBannerMessage))
+			{
+				<div class="import-banner @ImportBannerLevel">@ImportBannerMessage</div>
+			}
 
 			<div class="tab-row">
 				@foreach (var tab in Tabs)
@@ -30,7 +41,7 @@
 			<div class="asset-list" role="list" aria-label="Toggleable assets">
 				@if (FilteredItems.Count == 0)
 				{
-					<div class="asset-empty">No assets in this tab.</div>
+					<div class="asset-empty">Upload a mod zip to populate this list.</div>
 				}
 				else
 				{
@@ -38,7 +49,8 @@
 					{
 						<label class="asset-row">
 							<input type="checkbox" checked="@item.Enabled" @onchange="(e) => OnToggleItemChanged(item, e.Value)" />
-							<span>@item.Name</span>
+							<span>@item.DisplayName</span>
+							<span class="asset-tag">@item.BodyPartTag</span>
 						</label>
 					}
 				}
@@ -115,30 +127,17 @@
 	private bool initialized;
 	private bool DiagnosticsModalOpen;
 	private string SelectedTab = "All";
+	private string ImportBannerMessage = string.Empty;
+	private string ImportBannerLevel = "info";
 
-	private static readonly List<string> Tabs = new()
-	{
-		"All",
-		"Head",
-		"Body",
-		"Limb",
-		"World"
-	};
+	private static readonly List<string> Tabs = new() { "All", "Head", "Neck", "Body", "Hip", "LeftArm", "RightArm", "LeftLeg", "RightLeg", "World" };
 
-	private readonly List<ToggleItem> ToggleItems = new()
-	{
-		new ToggleItem("Hat_A", "Head", true),
-		new ToggleItem("Mask_A", "Head", false),
-		new ToggleItem("Top_A", "Body", true),
-		new ToggleItem("Pants_A", "Body", true),
-		new ToggleItem("ArmBand_A", "Limb", false),
-		new ToggleItem("World_Effect_A", "World", false)
-	};
+	private List<PersistedModFile> StoredItems = new();
 
-	private List<ToggleItem> FilteredItems =>
+	private List<PersistedModFile> FilteredItems =>
 		SelectedTab == "All"
-			? ToggleItems
-			: ToggleItems.Where(item => item.Tab == SelectedTab).ToList();
+			? StoredItems
+			: StoredItems.Where(item => string.Equals(item.BodyPartTag, SelectedTab, StringComparison.OrdinalIgnoreCase)).ToList();
 
 	protected override async Task OnAfterRenderAsync(bool firstRender)
 	{
@@ -154,6 +153,7 @@
 		// Set JS runtime for asset rendering
 		Loader.SetJSRuntime(JS);
 		await Loader.LoadAsync();
+		await LoadStoredFilesAsync();
 	}
 
 	private async Task ReloadAsync()
@@ -177,18 +177,69 @@
 		SelectedTab = tab;
 	}
 
-	private async Task ImportModPlaceholderAsync()
+	private async Task OpenImportPickerAsync()
 	{
-		Diagnostics.Add("info", "Import Mod placeholder clicked");
-		await Task.CompletedTask;
+		await JS.InvokeVoidAsync("modViewer.openFilePicker", "mod-zip-input");
+	}
+
+	private async Task HandleModZipSelectedAsync(InputFileChangeEventArgs args)
+	{
+		var zipFile = args.File;
+		if (zipFile is null)
+		{
+			return;
+		}
+
+		if (!string.Equals(Path.GetExtension(zipFile.Name), ".zip", StringComparison.OrdinalIgnoreCase))
+		{
+			Diagnostics.Add("warn", $"Unsupported file type: {zipFile.Name}. Import expects a .zip file.");
+			return;
+		}
+
+		try
+		{
+			var importSummary = await ModImport.ImportZipAsync(zipFile);
+			var validItems = importSummary.Items.Where(item => item.IsValid).ToList();
+			if (validItems.Count > 0)
+			{
+				await ModStorage.StoreValidFilesAsync(validItems);
+			}
+
+			await LoadStoredFilesAsync();
+
+			ImportBannerLevel = importSummary.RejectedCount > 0 ? "warn" : "info";
+			ImportBannerMessage = $"{zipFile.Name}: {validItems.Count} stored, {importSummary.RejectedCount} rejected.";
+
+			if (importSummary.TotalHhhFiles == 0)
+			{
+				Diagnostics.Add("warn", $"{zipFile.Name}: no .hhh files found.");
+			}
+			else
+			{
+				Diagnostics.Add("info", $"{zipFile.Name}: {validItems.Count} stored, {importSummary.RejectedCount} rejected.");
+				foreach (var invalid in importSummary.Items.Where(item => !item.IsValid))
+				{
+					Diagnostics.Add("warn", $"Rejected {invalid.FileName}: {invalid.ErrorMessage}");
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			ImportBannerLevel = "error";
+			ImportBannerMessage = "Import failed.";
+			Diagnostics.Add("error", $"Mod import failed: {ex.Message}");
+		}
 	}
 
 	private async Task ClearIndexedDbAsync()
 	{
 		try
 		{
-			await JS.InvokeVoidAsync("modViewer.clearIndexedDb");
-			Diagnostics.Add("info", "IndexedDB clear request completed");
+			await ModStorage.ClearAsync();
+			StoredItems.Clear();
+			ImportBannerLevel = "info";
+			ImportBannerMessage = "Stored mods cleared.";
+			Diagnostics.Add("info", "Mod storage cleared from IndexedDB.");
 		}
 		catch (Exception ex)
 		{
@@ -196,7 +247,13 @@
 		}
 	}
 
-	private void OnToggleItemChanged(ToggleItem item, object? value)
+	private async Task LoadStoredFilesAsync()
+	{
+		StoredItems = await ModStorage.GetValidFilesAsync();
+		StateHasChanged();
+	}
+
+	private void OnToggleItemChanged(PersistedModFile item, object? value)
 	{
 		item.Enabled = value is bool b && b;
 	}
@@ -209,19 +266,5 @@
 	public void Dispose()
 	{
 		Diagnostics.OnChanged -= HandleDiagnosticsChanged;
-	}
-
-	private sealed class ToggleItem
-	{
-		public ToggleItem(string name, string tab, bool enabled)
-		{
-			Name = name;
-			Tab = tab;
-			Enabled = enabled;
-		}
-
-		public string Name { get; }
-		public string Tab { get; }
-		public bool Enabled { get; set; }
 	}
 }

@@ -1,4 +1,8 @@
 (function () {
+    const MOD_DB_NAME = "modviewer-mods";
+    const MOD_DB_VERSION = 1;
+    const MOD_STORE = "hhhFiles";
+
     const state = {
         renderer: null,
         scene: null,
@@ -270,33 +274,106 @@
 
     async function clearIndexedDb() {
         try {
-            if (!window.indexedDB) {
-                return;
-            }
-
-            if (typeof indexedDB.databases !== "function") {
-                return;
-            }
-
-            const databases = await indexedDB.databases();
-            const deletions = databases
-                .filter((database) => database && typeof database.name === "string")
-                .map((database) => new Promise((resolve) => {
-                    const request = indexedDB.deleteDatabase(database.name);
-                    request.onsuccess = () => resolve();
-                    request.onerror = () => resolve();
-                    request.onblocked = () => resolve();
-                }));
-
-            await Promise.all(deletions);
+            await clearModDb();
         } catch (err) {
             console.warn("IndexedDB clear failed", err);
         }
+    }
+
+    function openModDb() {
+        return new Promise((resolve, reject) => {
+            if (!window.indexedDB) {
+                resolve(null);
+                return;
+            }
+
+            const request = indexedDB.open(MOD_DB_NAME, MOD_DB_VERSION);
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(MOD_STORE)) {
+                    const store = db.createObjectStore(MOD_STORE, { keyPath: "id" });
+                    store.createIndex("bodyPartTag", "bodyPartTag", { unique: false });
+                    store.createIndex("importedAtUtc", "importedAtUtc", { unique: false });
+                }
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error || new Error("Unable to open IndexedDB"));
+        });
+    }
+
+    function txComplete(tx) {
+        return new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+            tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+        });
+    }
+
+    async function storeHhhFiles(files) {
+        const db = await openModDb();
+        if (!db || !Array.isArray(files) || files.length === 0) {
+            return;
+        }
+
+        const tx = db.transaction(MOD_STORE, "readwrite");
+        const store = tx.objectStore(MOD_STORE);
+        for (const file of files) {
+            store.put(file);
+        }
+
+        await txComplete(tx);
+        db.close();
+    }
+
+    async function getStoredHhhFiles() {
+        const db = await openModDb();
+        if (!db) {
+            return [];
+        }
+
+        const tx = db.transaction(MOD_STORE, "readonly");
+        const store = tx.objectStore(MOD_STORE);
+
+        const result = await new Promise((resolve, reject) => {
+            const request = store.getAll();
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error || new Error("Failed to read stored .hhh files"));
+        });
+
+        await txComplete(tx);
+        db.close();
+        return result;
+    }
+
+    function clearModDb() {
+        return new Promise((resolve) => {
+            if (!window.indexedDB) {
+                resolve();
+                return;
+            }
+
+            const request = indexedDB.deleteDatabase(MOD_DB_NAME);
+            request.onsuccess = () => resolve();
+            request.onerror = () => resolve();
+            request.onblocked = () => resolve();
+        });
+    }
+
+    function openFilePicker(elementId) {
+        const input = document.getElementById(elementId);
+        if (!input) {
+            return;
+        }
+
+        input.click();
     }
 
     window.modViewer = {
         init,
         renderAvatar,
         clearIndexedDb,
+        openFilePicker,
+        storeHhhFiles,
+        getStoredHhhFiles,
     };
 })();
