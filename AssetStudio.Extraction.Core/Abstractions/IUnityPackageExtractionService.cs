@@ -6,5 +6,6 @@ namespace AssetStudio.Extraction.Core.Abstractions
     public interface IUnityPackageExtractionService
     {
         Task<ExtractionSceneData> ExtractAsync(byte[] packageBytes, IExtractionLogger? logger = null);
+        Task<ExtractionSceneData> ExtractStaticAssetAsync(byte[] assetBytes, string sourceName, IExtractionLogger? logger = null);
     }
 }

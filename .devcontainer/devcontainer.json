@@ -29,7 +29,7 @@
       }
     }
   },
-  "postCreateCommand": "dotnet restore && dotnet build AssetStudio.sln && npx @playwright/cli@latest install && npx @playwright/cli@latest install-browser",
+  "postCreateCommand": "bash -lc 'set -e; dotnet restore AssetStudio.sln; dotnet build AssetStudio.sln; dotnet restore ModViewer.sln; dotnet build ModViewer.sln; npx --yes playwright@1.58.2 install chromium'",
   "remoteUser": "vscode",
   "remoteEnv": {
     "DOTNET_CLI_TELEMETRY_OPTOUT": "true"

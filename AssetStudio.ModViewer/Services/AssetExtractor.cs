@@ -2,7 +2,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using AssetStudio.Extraction.Core.Abstractions;
 using AssetStudio.Extraction.Core.Models;
-using AssetStudio.Extraction.Core.Services;
 
 namespace AssetStudio.ModViewer.Services
 {
@@ -20,6 +19,12 @@ namespace AssetStudio.ModViewer.Services
         public async Task<Models.AvatarData> ExtractAvatarAsync(byte[] packageBytes)
         {
             var scene = await extractionService.ExtractAsync(packageBytes, new DiagnosticsLogger(diagnostics));
+            return MapSceneToAvatar(scene);
+        }
+
+        public async Task<Models.AvatarData> ExtractStaticAssetAsync(byte[] assetBytes, string sourceName)
+        {
+            var scene = await extractionService.ExtractStaticAssetAsync(assetBytes, sourceName, new DiagnosticsLogger(diagnostics));
             return MapSceneToAvatar(scene);
         }
 
@@ -66,6 +71,13 @@ namespace AssetStudio.ModViewer.Services
                     Position = bone.Position,
                     Rotation = bone.Rotation,
                     Scale = bone.Scale
+                }).ToList(),
+                AttachmentAnchors = scene.AttachmentAnchors.Select(anchor => new Models.AvatarData.AttachmentAnchorData
+                {
+                    Tag = anchor.Tag,
+                    Position = anchor.Position,
+                    Rotation = anchor.Rotation,
+                    Scale = anchor.Scale
                 }).ToList()
             };
         }

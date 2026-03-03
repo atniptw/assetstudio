@@ -46,11 +46,20 @@ namespace AssetStudio.Extraction.Core.Models
             public float[] Scale { get; set; }
         }
 
+        public class AttachmentAnchorData
+        {
+            public string Tag { get; set; }
+            public float[] Position { get; set; } = { 0f, 0f, 0f };
+            public float[] Rotation { get; set; } = { 0f, 0f, 0f, 1f };
+            public float[] Scale { get; set; } = { 1f, 1f, 1f };
+        }
+
         public string Name { get; set; }
         public List<MeshData> Meshes { get; set; } = new();
         public List<TextureData> Textures { get; set; } = new();
         public List<MaterialData> Materials { get; set; } = new();
         public List<BoneData> Bones { get; set; } = new();
+        public List<AttachmentAnchorData> AttachmentAnchors { get; set; } = new();
         public int RootBoneIndex { get; set; } = 0;
     }
 }

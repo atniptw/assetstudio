@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     wget \
+    ca-certificates \
+    xdg-utils \
     p7zip-full \
     libbrotli-dev \
     libglib2.0-0 \
@@ -33,6 +35,10 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     libxss1 \
     libgtk-3-0 \
+    libfontconfig1 \
+    libfreetype6 \
+    libu2f-udev \
+    libvulkan1 \
     fonts-liberation \
     build-essential \
     cmake \

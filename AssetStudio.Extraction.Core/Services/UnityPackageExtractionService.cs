@@ -119,6 +119,8 @@ namespace AssetStudio.Extraction.Core.Services
                     Log("warn", "No asset files found in unitypackage");
                 }
 
+                PopulateAttachmentAnchors(sceneData);
+
                 timer.Stop();
                 Log("info", $"Extraction complete in {timer.ElapsedMilliseconds}ms");
 
@@ -130,6 +132,95 @@ namespace AssetStudio.Extraction.Core.Services
                 Log("error", $"Extraction failed: {ex.Message}");
                 this.logger = null;
                 throw;
+            }
+        }
+
+        public async Task<ExtractionSceneData> ExtractStaticAssetAsync(byte[] assetBytes, string sourceName, IExtractionLogger? logger = null)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                this.logger = logger;
+
+                var sceneData = new ExtractionSceneData
+                {
+                    Name = Path.GetFileNameWithoutExtension(sourceName) ?? "StaticAsset",
+                    Meshes = new(),
+                    Textures = new(),
+                    Materials = new(),
+                    Bones = new()
+                };
+
+                var key = string.IsNullOrWhiteSpace(sourceName) ? "asset.hhh" : sourceName;
+                var assetFiles = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [key] = assetBytes
+                };
+
+                Log("info", $"Extracting static asset: {key} ({assetBytes.Length:N0} bytes)");
+                await LoadStaticAssetIntoSceneData(assetFiles, sceneData);
+                PopulateAttachmentAnchors(sceneData);
+
+                timer.Stop();
+                Log("info", $"Static extraction complete in {timer.ElapsedMilliseconds}ms");
+
+                this.logger = null;
+                return sceneData;
+            }
+            catch (Exception ex)
+            {
+                Log("error", $"Static extraction failed: {ex.Message}");
+                this.logger = null;
+                throw;
+            }
+        }
+
+        private async Task LoadStaticAssetIntoSceneData(Dictionary<string, byte[]> assetFiles, ExtractionSceneData sceneData)
+        {
+            if (assetFiles == null || assetFiles.Count == 0)
+                return;
+
+            var tempRoot = Path.Combine(Path.GetTempPath(), $"assetstudio-static-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempRoot);
+
+            try
+            {
+                var manager = new AssetsManager
+                {
+                    Silent = true,
+                    SkipProcess = false,
+                    Game = GameManager.GetGame(GameType.Normal)
+                };
+
+                var tempFiles = new List<string>(assetFiles.Count);
+                foreach (var kvp in assetFiles)
+                {
+                    var fileName = Path.GetFileName(string.IsNullOrWhiteSpace(kvp.Key) ? "asset.hhh" : kvp.Key);
+                    if (string.IsNullOrWhiteSpace(fileName))
+                    {
+                        fileName = "asset.hhh";
+                    }
+
+                    var tempPath = Path.Combine(tempRoot, fileName);
+                    await File.WriteAllBytesAsync(tempPath, kvp.Value);
+                    tempFiles.Add(tempPath);
+                }
+
+                manager.LoadFiles(tempFiles.ToArray());
+                Log("info", $"Loaded {manager.assetsFileList.Count} serialized files from static asset");
+
+                ExtractMeshesAndTextures(manager, sceneData);
+                Log("info", $"Extracted {sceneData.Materials.Count} materials and {sceneData.Textures.Count} textures");
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch
+                {
+                }
             }
         }
 
@@ -272,8 +363,11 @@ namespace AssetStudio.Extraction.Core.Services
                 var readAssetsMethod = typeof(AssetsManager).GetMethod(
                     "ReadAssets",
                     BindingFlags.Instance | BindingFlags.NonPublic);
+                var processAssetsMethod = typeof(AssetsManager).GetMethod(
+                    "ProcessAssets",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
 
-                if (loadFileMethod == null || readAssetsMethod == null)
+                if (loadFileMethod == null || readAssetsMethod == null || processAssetsMethod == null)
                     throw new MissingMethodException("Unable to access AssetsManager internal loading methods");
 
                 var openStreams = new List<MemoryStream>();
@@ -300,6 +394,7 @@ namespace AssetStudio.Extraction.Core.Services
                     }
 
                     readAssetsMethod.Invoke(manager, null);
+                    processAssetsMethod.Invoke(manager, null);
                 }
                 finally
                 {
@@ -343,6 +438,107 @@ namespace AssetStudio.Extraction.Core.Services
                 Log("error", $"Failed to load assets from unitypackage: {ex.Message}");
                 throw;
             }
+        }
+
+        private static readonly string[] AnchorTags =
+        {
+            "head", "neck", "body", "hip", "leftarm", "rightarm", "leftleg", "rightleg", "world"
+        };
+
+        private static readonly Dictionary<string, string[]> AnchorKeywords = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["head"] = new[] { "head" },
+            ["neck"] = new[] { "neck" },
+            ["body"] = new[] { "body", "spine", "torso" },
+            ["hip"] = new[] { "hip", "pelvis" },
+            ["leftarm"] = new[] { "leftarm", "arm_l", "left arm", "l_arm", "upperarm_l" },
+            ["rightarm"] = new[] { "rightarm", "arm_r", "right arm", "r_arm", "upperarm_r" },
+            ["leftleg"] = new[] { "leftleg", "leg_l", "left leg", "l_leg", "thigh_l" },
+            ["rightleg"] = new[] { "rightleg", "leg_r", "right leg", "r_leg", "thigh_r" },
+            ["world"] = new[] { "world", "root" }
+        };
+
+        private void PopulateAttachmentAnchors(ExtractionSceneData sceneData)
+        {
+            var anchors = new List<ExtractionSceneData.AttachmentAnchorData>(AnchorTags.Length);
+            foreach (var tag in AnchorTags)
+            {
+                var anchor = ResolveAnchor(sceneData, tag);
+                anchors.Add(anchor);
+            }
+
+            sceneData.AttachmentAnchors = anchors;
+        }
+
+        private ExtractionSceneData.AttachmentAnchorData ResolveAnchor(ExtractionSceneData sceneData, string tag)
+        {
+            var keywords = AnchorKeywords.TryGetValue(tag, out var values)
+                ? values
+                : Array.Empty<string>();
+
+            var bone = sceneData.Bones
+                .FirstOrDefault(candidate =>
+                    !string.IsNullOrWhiteSpace(candidate.Name) &&
+                    keywords.Any(keyword => candidate.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+
+            if (bone != null)
+            {
+                return new ExtractionSceneData.AttachmentAnchorData
+                {
+                    Tag = tag,
+                    Position = NormalizeVector3(bone.Position),
+                    Rotation = NormalizeQuaternion(bone.Rotation),
+                    Scale = NormalizeScale(bone.Scale)
+                };
+            }
+
+            var mesh = sceneData.Meshes
+                .FirstOrDefault(candidate =>
+                    !string.IsNullOrWhiteSpace(candidate.Name) &&
+                    keywords.Any(keyword => candidate.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+
+            if (mesh != null)
+            {
+                return new ExtractionSceneData.AttachmentAnchorData
+                {
+                    Tag = tag,
+                    Position = NormalizeVector3(mesh.Position),
+                    Rotation = NormalizeQuaternion(mesh.Rotation),
+                    Scale = NormalizeScale(mesh.Scale)
+                };
+            }
+
+            return new ExtractionSceneData.AttachmentAnchorData
+            {
+                Tag = tag,
+                Position = new[] { 0f, 0f, 0f },
+                Rotation = new[] { 0f, 0f, 0f, 1f },
+                Scale = new[] { 1f, 1f, 1f }
+            };
+        }
+
+        private static float[] NormalizeVector3(float[]? value)
+        {
+            if (value == null || value.Length < 3)
+                return new[] { 0f, 0f, 0f };
+
+            return new[] { value[0], value[1], value[2] };
+        }
+
+        private static float[] NormalizeQuaternion(float[]? value)
+        {
+            if (value == null || value.Length < 4)
+                return new[] { 0f, 0f, 0f, 1f };
+
+            return new[] { value[0], value[1], value[2], value[3] };
+        }
+
+        private static float[] NormalizeScale(float[]? value)
+        {
+            if (value == null || value.Length < 3)
+                return new[] { 1f, 1f, 1f };
+
+            return new[] { value[0], value[1], value[2] };
         }
 
         private Dictionary<string, int> ExtractYamlMaterialsAndTextures(
@@ -1333,6 +1529,7 @@ namespace AssetStudio.Extraction.Core.Services
 
             var materialIndexByObjectKey = ExtractPrimaryMaterialsAndTextures(manager, sceneData);
             var materialIndexByMeshKey = BuildMeshMaterialMap(manager, materialIndexByObjectKey);
+            var meshTransformByMeshKey = BuildMeshTransformMap(manager);
 
             // Convert meshes to serializable format
             foreach (var mesh in meshes.Take(maxMeshCount))
@@ -1346,6 +1543,14 @@ namespace AssetStudio.Extraction.Core.Services
                         {
                             meshData.MaterialIndex = materialIndex;
                         }
+
+                        if (meshTransformByMeshKey.TryGetValue(GetObjectKey(mesh), out var meshTransform))
+                        {
+                            meshData.Position = meshTransform.Position;
+                            meshData.Rotation = meshTransform.Rotation;
+                            meshData.Scale = meshTransform.Scale;
+                        }
+
                         sceneData.Meshes.Add(meshData);
                     }
                 }
@@ -1496,6 +1701,41 @@ namespace AssetStudio.Extraction.Core.Services
                 {
                     map[meshKey] = materialIndex;
                 }
+            }
+
+            return map;
+        }
+
+        private Dictionary<string, MeshTransformData> BuildMeshTransformMap(AssetsManager manager)
+        {
+            var map = new Dictionary<string, MeshTransformData>(StringComparer.Ordinal);
+            var gameObjects = manager.assetsFileList
+                .SelectMany(f => f.Objects.OfType<GameObject>() ?? new List<GameObject>())
+                .ToList();
+
+            foreach (var gameObject in gameObjects)
+            {
+                if (!TryGetRenderer(gameObject, out var renderer))
+                    continue;
+
+                var mesh = ResolveRendererMesh(gameObject, renderer);
+                if (mesh == null)
+                    continue;
+
+                if (gameObject?.m_Transform == null)
+                    continue;
+
+                var meshKey = GetObjectKey(mesh);
+                if (map.ContainsKey(meshKey))
+                    continue;
+
+                var transform = gameObject.m_Transform;
+                map[meshKey] = new MeshTransformData
+                {
+                    Position = new[] { transform.m_LocalPosition.X, transform.m_LocalPosition.Y, transform.m_LocalPosition.Z },
+                    Rotation = new[] { transform.m_LocalRotation.X, transform.m_LocalRotation.Y, transform.m_LocalRotation.Z, transform.m_LocalRotation.W },
+                    Scale = new[] { transform.m_LocalScale.X, transform.m_LocalScale.Y, transform.m_LocalScale.Z }
+                };
             }
 
             return map;
@@ -1753,6 +1993,13 @@ namespace AssetStudio.Extraction.Core.Services
         }
 
         private sealed class TransformWorld
+        {
+            public required float[] Position { get; init; }
+            public required float[] Rotation { get; init; }
+            public required float[] Scale { get; init; }
+        }
+
+        private sealed class MeshTransformData
         {
             public required float[] Position { get; init; }
             public required float[] Rotation { get; init; }

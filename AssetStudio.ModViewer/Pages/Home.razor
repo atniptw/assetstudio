@@ -4,8 +4,11 @@
 @inject BasePackageLoader Loader
 @inject ModImportService ModImport
 @inject ModStorageService ModStorage
+@inject AssetExtractor Extractor
 @implements IDisposable
 @using System.IO
+@using System.Text.Json
+@using System.Text.Json.Serialization
 @using AssetStudio.ModViewer.Models
 @using Microsoft.AspNetCore.Components.Forms
 
@@ -159,6 +162,7 @@
 	private async Task ReloadAsync()
 	{
 		Diagnostics.Clear();
+		await JS.InvokeVoidAsync("modViewer.clearModAssets");
 		await Loader.LoadAsync();
 	}
 
@@ -236,6 +240,7 @@
 		try
 		{
 			await ModStorage.ClearAsync();
+			await JS.InvokeVoidAsync("modViewer.clearModAssets");
 			StoredItems.Clear();
 			ImportBannerLevel = "info";
 			ImportBannerMessage = "Stored mods cleared.";
@@ -253,9 +258,84 @@
 		StateHasChanged();
 	}
 
-	private void OnToggleItemChanged(PersistedModFile item, object? value)
+	private async Task OnToggleItemChanged(PersistedModFile item, object? value)
 	{
 		item.Enabled = value is bool b && b;
+
+		if (!item.Enabled)
+		{
+			await JS.InvokeVoidAsync("modViewer.removeModAsset", item.Id);
+			Diagnostics.Add("info", $"Removed mod: {item.DisplayName}");
+			return;
+		}
+
+		if (string.IsNullOrWhiteSpace(item.DataBase64))
+		{
+			item.Enabled = false;
+			Diagnostics.Add("warn", $"Missing .hhh payload for {item.DisplayName}");
+			return;
+		}
+
+		try
+		{
+			var bytes = Convert.FromBase64String(item.DataBase64);
+			var avatarData = await Extractor.ExtractStaticAssetAsync(bytes, item.FileName);
+			Diagnostics.Add("info", $"Extracted {item.DisplayName}: meshes={avatarData.Meshes.Count}, materials={avatarData.Materials.Count}, textures={avatarData.Textures.Count}, anchors={avatarData.AttachmentAnchors.Count}");
+
+			if (avatarData.Meshes.Count == 0)
+			{
+				item.Enabled = false;
+				Diagnostics.Add("warn", $"No meshes extracted for {item.DisplayName}; skipping render.");
+				return;
+			}
+
+			var options = new JsonSerializerOptions
+			{
+				PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+				DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+			};
+
+			var json = JsonSerializer.Serialize(avatarData, options);
+			var addResult = await JS.InvokeAsync<ModRenderResult>("modViewer.addModAsset", item.Id, json, item.BodyPartTag?.ToLowerInvariant());
+			var renderState = await JS.InvokeAsync<ModRenderState>("modViewer.getRenderState");
+			Diagnostics.Add("info", $"Render add result for {item.DisplayName}: added={addResult?.Added}, reason={addResult?.Reason}, anchor={addResult?.AnchorTag}, anchorFound={addResult?.AnchorFound}, modGroups={addResult?.ModGroupCount}, sceneMeshes={renderState?.SceneMeshCount}, modMeshes={addResult?.MeshCount}, boundsCenter=[{FormatVector(addResult?.BoundsCenter)}], boundsSize=[{FormatVector(addResult?.BoundsSize)}]");
+			Diagnostics.Add("info", $"Rendered mod: {item.DisplayName} ({item.BodyPartTag})");
+		}
+		catch (Exception ex)
+		{
+			item.Enabled = false;
+			Diagnostics.Add("warn", $"Unable to render mod {item.DisplayName}: {ex.Message}");
+		}
+	}
+
+	private sealed class ModRenderResult
+	{
+		public bool Added { get; set; }
+		public string? Reason { get; set; }
+		public string? AnchorTag { get; set; }
+		public bool AnchorFound { get; set; }
+		public int ModGroupCount { get; set; }
+		public int MeshCount { get; set; }
+		public float[]? BoundsCenter { get; set; }
+		public float[]? BoundsSize { get; set; }
+	}
+
+	private sealed class ModRenderState
+	{
+		public int SceneMeshCount { get; set; }
+		public int ModGroupCount { get; set; }
+		public int AnchorCount { get; set; }
+		public int AvatarMeshCount { get; set; }
+	}
+
+	private static string FormatVector(float[]? value)
+	{
+		if (value is null || value.Length == 0)
+		{
+			return "n/a";
+		}
+
+		return string.Join(", ", value.Select(component => component.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)));
 	}
 
 	private void HandleDiagnosticsChanged()
