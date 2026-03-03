@@ -268,8 +268,35 @@
         }
     }
 
+    async function clearIndexedDb() {
+        try {
+            if (!window.indexedDB) {
+                return;
+            }
+
+            if (typeof indexedDB.databases !== "function") {
+                return;
+            }
+
+            const databases = await indexedDB.databases();
+            const deletions = databases
+                .filter((database) => database && typeof database.name === "string")
+                .map((database) => new Promise((resolve) => {
+                    const request = indexedDB.deleteDatabase(database.name);
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => resolve();
+                    request.onblocked = () => resolve();
+                }));
+
+            await Promise.all(deletions);
+        } catch (err) {
+            console.warn("IndexedDB clear failed", err);
+        }
+    }
+
     window.modViewer = {
         init,
         renderAvatar,
+        clearIndexedDb,
     };
 })();

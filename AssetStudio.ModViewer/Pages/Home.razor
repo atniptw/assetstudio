@@ -6,17 +6,71 @@
 
 <PageTitle>ModViewer</PageTitle>
 
-<div class="viewer-layout">
-	<section class="diagnostics-panel">
-		<header class="panel-header">
-			<div>
-				<h1>ModViewer</h1>
-				<p class="subtle">Base avatar bootstrap + diagnostics</p>
-			</div>
-			<button class="btn btn-sm btn-outline-light" @onclick="ReloadAsync">Reload</button>
-		</header>
+<div class="viewer-page">
+	<header class="page-header">
+		<div>
+			<h1>ModViewer</h1>
+			<p class="subtle">Base avatar + mod dress-up</p>
+		</div>
+		<span class="subtle">Status: @Loader.PackageStatus</span>
+	</header>
 
-		<div class="panel-body">
+	<div class="viewer-layout">
+		<section class="left-panel">
+
+			<button class="btn btn-outline-light import-btn" @onclick="ImportModPlaceholderAsync">Import Mod</button>
+
+			<div class="tab-row">
+				@foreach (var tab in Tabs)
+				{
+					<button class="tab-btn @(SelectedTab == tab ? "active" : string.Empty)" @onclick="() => SelectTab(tab)">@tab</button>
+				}
+			</div>
+
+			<div class="asset-list" role="list" aria-label="Toggleable assets">
+				@if (FilteredItems.Count == 0)
+				{
+					<div class="asset-empty">No assets in this tab.</div>
+				}
+				else
+				{
+					@foreach (var item in FilteredItems)
+					{
+						<label class="asset-row">
+							<input type="checkbox" checked="@item.Enabled" @onchange="(e) => OnToggleItemChanged(item, e.Value)" />
+							<span>@item.Name</span>
+						</label>
+					}
+				}
+			</div>
+		</section>
+
+		<section class="viewer-panel right-panel">
+			<canvas id="viewer-canvas" class="viewer-canvas"></canvas>
+
+			<div class="viewer-controls">
+				<button class="btn btn-outline-light btn-sm" @onclick="OpenDiagnostics">Diagnostics</button>
+				<button class="btn btn-outline-light btn-sm" @onclick="ClearIndexedDbAsync">Clear IndexedDB</button>
+			</div>
+		</section>
+	</div>
+</div>
+
+@if (DiagnosticsModalOpen)
+{
+	<div class="diag-modal-backdrop" @onclick="CloseDiagnostics">
+		<div class="diag-modal" @onclick:stopPropagation="true">
+			<header class="diag-modal-header">
+				<div>
+					<h3>Diagnostics</h3>
+					<p class="subtle">Visible only when needed</p>
+				</div>
+				<div class="diag-modal-actions">
+					<button class="btn btn-sm btn-outline-light" @onclick="ReloadAsync">Reload</button>
+					<button class="btn btn-sm btn-outline-light" @onclick="CloseDiagnostics">Close</button>
+				</div>
+			</header>
+
 			<div class="diag-summary">
 				<div>
 					<span class="label">Package</span>
@@ -54,19 +108,37 @@
 				}
 			</div>
 		</div>
-	</section>
-
-	<section class="viewer-panel">
-		<div class="viewer-header">
-			<h2>Avatar Preview</h2>
-			<span class="subtle">three.js viewport</span>
-		</div>
-		<canvas id="viewer-canvas" class="viewer-canvas"></canvas>
-	</section>
-</div>
+	</div>
+}
 
 @code {
 	private bool initialized;
+	private bool DiagnosticsModalOpen;
+	private string SelectedTab = "All";
+
+	private static readonly List<string> Tabs = new()
+	{
+		"All",
+		"Head",
+		"Body",
+		"Limb",
+		"World"
+	};
+
+	private readonly List<ToggleItem> ToggleItems = new()
+	{
+		new ToggleItem("Hat_A", "Head", true),
+		new ToggleItem("Mask_A", "Head", false),
+		new ToggleItem("Top_A", "Body", true),
+		new ToggleItem("Pants_A", "Body", true),
+		new ToggleItem("ArmBand_A", "Limb", false),
+		new ToggleItem("World_Effect_A", "World", false)
+	};
+
+	private List<ToggleItem> FilteredItems =>
+		SelectedTab == "All"
+			? ToggleItems
+			: ToggleItems.Where(item => item.Tab == SelectedTab).ToList();
 
 	protected override async Task OnAfterRenderAsync(bool firstRender)
 	{
@@ -90,6 +162,45 @@
 		await Loader.LoadAsync();
 	}
 
+	private void OpenDiagnostics()
+	{
+		DiagnosticsModalOpen = true;
+	}
+
+	private void CloseDiagnostics()
+	{
+		DiagnosticsModalOpen = false;
+	}
+
+	private void SelectTab(string tab)
+	{
+		SelectedTab = tab;
+	}
+
+	private async Task ImportModPlaceholderAsync()
+	{
+		Diagnostics.Add("info", "Import Mod placeholder clicked");
+		await Task.CompletedTask;
+	}
+
+	private async Task ClearIndexedDbAsync()
+	{
+		try
+		{
+			await JS.InvokeVoidAsync("modViewer.clearIndexedDb");
+			Diagnostics.Add("info", "IndexedDB clear request completed");
+		}
+		catch (Exception ex)
+		{
+			Diagnostics.Add("warn", $"Unable to clear IndexedDB: {ex.Message}");
+		}
+	}
+
+	private void OnToggleItemChanged(ToggleItem item, object? value)
+	{
+		item.Enabled = value is bool b && b;
+	}
+
 	private void HandleDiagnosticsChanged()
 	{
 		InvokeAsync(StateHasChanged);
@@ -98,5 +209,19 @@
 	public void Dispose()
 	{
 		Diagnostics.OnChanged -= HandleDiagnosticsChanged;
+	}
+
+	private sealed class ToggleItem
+	{
+		public ToggleItem(string name, string tab, bool enabled)
+		{
+			Name = name;
+			Tab = tab;
+			Enabled = enabled;
+		}
+
+		public string Name { get; }
+		public string Tab { get; }
+		public bool Enabled { get; set; }
 	}
 }
