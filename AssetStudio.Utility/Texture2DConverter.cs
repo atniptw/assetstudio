@@ -33,10 +33,17 @@ namespace AssetStudio
                 return false;
             }
             var flag = false;
-            var buff = ArrayPool<byte>.Shared.Rent(reader.Size);
+            var rented = ArrayPool<byte>.Shared.Rent(reader.Size);
+            var buff = rented;
             try
             {
                 reader.GetData(buff);
+                if (buff.Length != reader.Size)
+                {
+                    var exact = new byte[reader.Size];
+                    Buffer.BlockCopy(buff, 0, exact, 0, reader.Size);
+                    buff = exact;
+                }
                 switch (m_TextureFormat)
                 {
                     case TextureFormat.Alpha8: //test pass
@@ -216,7 +223,7 @@ namespace AssetStudio
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buff, true);
+                ArrayPool<byte>.Shared.Return(rented, true);
             }
 
             return flag;
@@ -331,12 +338,186 @@ namespace AssetStudio
 
         private bool DecodeDXT1(byte[] image_data, byte[] buff)
         {
-            return TextureDecoder.DecodeDXT1(image_data, m_Width, m_Height, buff);
+            return TryDecodeDxtWithFallback(image_data, buff, isDxt1: true);
         }
 
         private bool DecodeDXT5(byte[] image_data, byte[] buff)
         {
-            return TextureDecoder.DecodeDXT5(image_data, m_Width, m_Height, buff);
+            return TryDecodeDxtWithFallback(image_data, buff, isDxt1: false);
+        }
+
+        private bool TryDecodeDxtWithFallback(byte[] imageData, byte[] outBuffer, bool isDxt1)
+        {
+            if (imageData == null || imageData.Length == 0)
+                return false;
+
+            if (TryDecodeDxt(imageData, outBuffer, isDxt1))
+                return true;
+
+            if (TryDecodeDxtByteSwapped(imageData, outBuffer, isDxt1))
+                return true;
+
+            var blockBytes = isDxt1 ? 8 : 16;
+            var expectedBaseMip = GetBlockCompressedBaseMipSize(m_Width, m_Height, blockBytes);
+            if (expectedBaseMip <= 0 || imageData.Length < expectedBaseMip)
+                return false;
+
+            if (isDxt1 && TryDecodeDxt1Manual(imageData, 0, expectedBaseMip, outBuffer))
+                return true;
+
+            if (TryDecodeDxtSlice(imageData, 0, expectedBaseMip, outBuffer, isDxt1))
+                return true;
+
+            var maxOffset = Math.Min(256, imageData.Length - expectedBaseMip);
+            for (var offset = blockBytes; offset <= maxOffset; offset += blockBytes)
+            {
+                if (isDxt1 && TryDecodeDxt1Manual(imageData, offset, expectedBaseMip, outBuffer))
+                    return true;
+
+                if (TryDecodeDxtSlice(imageData, offset, expectedBaseMip, outBuffer, isDxt1))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool TryDecodeDxt(byte[] source, byte[] outBuffer, bool isDxt1)
+        {
+            try
+            {
+                return isDxt1
+                    ? TextureDecoder.DecodeDXT1(source, m_Width, m_Height, outBuffer)
+                    : TextureDecoder.DecodeDXT5(source, m_Width, m_Height, outBuffer);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryDecodeDxtSlice(byte[] source, int offset, int length, byte[] outBuffer, bool isDxt1)
+        {
+            var slice = new byte[length];
+            Buffer.BlockCopy(source, offset, slice, 0, length);
+            return TryDecodeDxt(slice, outBuffer, isDxt1)
+                || TryDecodeDxtByteSwapped(slice, outBuffer, isDxt1);
+        }
+
+        private bool TryDecodeDxtByteSwapped(byte[] source, byte[] outBuffer, bool isDxt1)
+        {
+            if (source.Length < 2)
+                return false;
+
+            var swapped = new byte[source.Length];
+            Buffer.BlockCopy(source, 0, swapped, 0, source.Length);
+            for (var i = 0; i + 1 < swapped.Length; i += 2)
+            {
+                var temp = swapped[i];
+                swapped[i] = swapped[i + 1];
+                swapped[i + 1] = temp;
+            }
+
+            return TryDecodeDxt(swapped, outBuffer, isDxt1);
+        }
+
+        private bool TryDecodeDxt1Manual(byte[] source, int offset, int length, byte[] outBuffer)
+        {
+            if (source == null || outBuffer == null || offset < 0 || length <= 0)
+                return false;
+            if (offset + length > source.Length)
+                return false;
+
+            var blockWidth = Math.Max(1, (m_Width + 3) / 4);
+            var blockHeight = Math.Max(1, (m_Height + 3) / 4);
+            var required = blockWidth * blockHeight * 8;
+            if (length < required)
+                return false;
+
+            var src = offset;
+            for (var blockY = 0; blockY < blockHeight; blockY++)
+            {
+                for (var blockX = 0; blockX < blockWidth; blockX++)
+                {
+                    var color0 = (ushort)(source[src] | (source[src + 1] << 8));
+                    var color1 = (ushort)(source[src + 2] | (source[src + 3] << 8));
+                    var indices = (uint)(source[src + 4]
+                        | (source[src + 5] << 8)
+                        | (source[src + 6] << 16)
+                        | (source[src + 7] << 24));
+                    src += 8;
+
+                    var palette = new (byte R, byte G, byte B, byte A)[4];
+                    DecodeRgb565(color0, out palette[0]);
+                    DecodeRgb565(color1, out palette[1]);
+
+                    if (color0 > color1)
+                    {
+                        palette[2] = (
+                            (byte)((2 * palette[0].R + palette[1].R) / 3),
+                            (byte)((2 * palette[0].G + palette[1].G) / 3),
+                            (byte)((2 * palette[0].B + palette[1].B) / 3),
+                            255);
+                        palette[3] = (
+                            (byte)((palette[0].R + 2 * palette[1].R) / 3),
+                            (byte)((palette[0].G + 2 * palette[1].G) / 3),
+                            (byte)((palette[0].B + 2 * palette[1].B) / 3),
+                            255);
+                    }
+                    else
+                    {
+                        palette[2] = (
+                            (byte)((palette[0].R + palette[1].R) / 2),
+                            (byte)((palette[0].G + palette[1].G) / 2),
+                            (byte)((palette[0].B + palette[1].B) / 2),
+                            255);
+                        palette[3] = (0, 0, 0, 0);
+                    }
+
+                    for (var py = 0; py < 4; py++)
+                    {
+                        var y = blockY * 4 + py;
+                        if (y >= m_Height)
+                            continue;
+
+                        for (var px = 0; px < 4; px++)
+                        {
+                            var x = blockX * 4 + px;
+                            if (x >= m_Width)
+                                continue;
+
+                            var paletteIndex = (int)((indices >> (2 * (py * 4 + px))) & 0x3);
+                            var color = palette[paletteIndex];
+                            var dst = (y * m_Width + x) * 4;
+                            outBuffer[dst] = color.B;
+                            outBuffer[dst + 1] = color.G;
+                            outBuffer[dst + 2] = color.R;
+                            outBuffer[dst + 3] = color.A;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static void DecodeRgb565(ushort value, out (byte R, byte G, byte B, byte A) color)
+        {
+            var r = (byte)((value >> 11) & 0x1F);
+            var g = (byte)((value >> 5) & 0x3F);
+            var b = (byte)(value & 0x1F);
+
+            color = (
+                (byte)((r << 3) | (r >> 2)),
+                (byte)((g << 2) | (g >> 4)),
+                (byte)((b << 3) | (b >> 2)),
+                255);
+        }
+
+        private static int GetBlockCompressedBaseMipSize(int width, int height, int blockBytes)
+        {
+            var blockWidth = Math.Max(1, (width + 3) / 4);
+            var blockHeight = Math.Max(1, (height + 3) / 4);
+            return blockWidth * blockHeight * blockBytes;
         }
 
         private bool DecodeRGBA4444(byte[] image_data, byte[] buff)
