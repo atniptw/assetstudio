@@ -135,7 +135,11 @@ namespace AssetStudio.Extraction.Core.Services
             }
         }
 
-        public async Task<ExtractionSceneData> ExtractStaticAssetAsync(byte[] assetBytes, string sourceName, IExtractionLogger? logger = null)
+        public async Task<ExtractionSceneData> ExtractStaticAssetAsync(
+            byte[] assetBytes,
+            string sourceName,
+            Dictionary<string, byte[]>? companionFiles = null,
+            IExtractionLogger? logger = null)
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -157,7 +161,22 @@ namespace AssetStudio.Extraction.Core.Services
                     [key] = assetBytes
                 };
 
+                if (companionFiles != null)
+                {
+                    foreach (var companion in companionFiles)
+                    {
+                        if (string.IsNullOrWhiteSpace(companion.Key) || companion.Value == null || companion.Value.Length == 0)
+                            continue;
+
+                        if (!assetFiles.ContainsKey(companion.Key))
+                        {
+                            assetFiles[companion.Key] = companion.Value;
+                        }
+                    }
+                }
+
                 Log("info", $"Extracting static asset: {key} ({assetBytes.Length:N0} bytes)");
+                Log("info", $"Static extraction context includes {assetFiles.Count} files");
                 await LoadStaticAssetIntoSceneData(assetFiles, sceneData);
                 PopulateAttachmentAnchors(sceneData);
 
@@ -193,6 +212,7 @@ namespace AssetStudio.Extraction.Core.Services
                 };
 
                 var tempFiles = new List<string>(assetFiles.Count);
+                var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var kvp in assetFiles)
                 {
                     var fileName = Path.GetFileName(string.IsNullOrWhiteSpace(kvp.Key) ? "asset.hhh" : kvp.Key);
@@ -200,6 +220,8 @@ namespace AssetStudio.Extraction.Core.Services
                     {
                         fileName = "asset.hhh";
                     }
+
+                    fileName = GetUniqueFileName(fileName, usedNames);
 
                     var tempPath = Path.Combine(tempRoot, fileName);
                     await File.WriteAllBytesAsync(tempPath, kvp.Value);
@@ -221,6 +243,24 @@ namespace AssetStudio.Extraction.Core.Services
                 catch
                 {
                 }
+            }
+        }
+
+        private static string GetUniqueFileName(string fileName, HashSet<string> usedNames)
+        {
+            if (usedNames.Add(fileName))
+                return fileName;
+
+            var baseName = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            var suffix = 1;
+            while (true)
+            {
+                var candidate = $"{baseName}_{suffix}{extension}";
+                if (usedNames.Add(candidate))
+                    return candidate;
+
+                suffix++;
             }
         }
 
@@ -508,6 +548,20 @@ namespace AssetStudio.Extraction.Core.Services
                 };
             }
 
+            if (TryResolveAnchorByMeshHeuristic(sceneData.Meshes, tag, out var heuristicMesh))
+            {
+                Log("info", $"Anchor '{tag}' resolved using mesh-position heuristic from '{heuristicMesh.Name}'");
+                return new ExtractionSceneData.AttachmentAnchorData
+                {
+                    Tag = tag,
+                    Position = NormalizeVector3(heuristicMesh.Position),
+                    Rotation = NormalizeQuaternion(heuristicMesh.Rotation),
+                    Scale = NormalizeScale(heuristicMesh.Scale)
+                };
+            }
+
+            Log("warn", $"Anchor '{tag}' fell back to default transform");
+
             return new ExtractionSceneData.AttachmentAnchorData
             {
                 Tag = tag,
@@ -515,6 +569,39 @@ namespace AssetStudio.Extraction.Core.Services
                 Rotation = new[] { 0f, 0f, 0f, 1f },
                 Scale = new[] { 1f, 1f, 1f }
             };
+        }
+
+        private static bool TryResolveAnchorByMeshHeuristic(
+            List<ExtractionSceneData.MeshData> meshes,
+            string tag,
+            out ExtractionSceneData.MeshData mesh)
+        {
+            mesh = null;
+            if (meshes == null || meshes.Count == 0)
+                return false;
+
+            if (string.Equals(tag, "head", StringComparison.OrdinalIgnoreCase))
+            {
+                mesh = meshes
+                    .Where(candidate => candidate?.Position != null && candidate.Position.Length >= 3)
+                    .OrderByDescending(candidate => candidate.Position[1])
+                    .FirstOrDefault();
+            }
+            else if (string.Equals(tag, "world", StringComparison.OrdinalIgnoreCase))
+            {
+                mesh = meshes
+                    .Where(candidate => candidate?.Position != null && candidate.Position.Length >= 3)
+                    .OrderBy(candidate =>
+                    {
+                        var x = candidate.Position[0];
+                        var y = candidate.Position[1];
+                        var z = candidate.Position[2];
+                        return x * x + y * y + z * z;
+                    })
+                    .FirstOrDefault();
+            }
+
+            return mesh != null;
         }
 
         private static float[] NormalizeVector3(float[]? value)
@@ -1192,7 +1279,8 @@ namespace AssetStudio.Extraction.Core.Services
                 if (parentWorld == null)
                     return null;
 
-                var rotatedLocal = RotateVectorByQuaternion(state.LocalPosition, parentWorld.Rotation);
+                var scaledLocal = MultiplyVectorComponents(state.LocalPosition, parentWorld.Scale);
+                var rotatedLocal = RotateVectorByQuaternion(scaledLocal, parentWorld.Rotation);
                 world = new TransformWorld
                 {
                     Position = new[]
@@ -1245,6 +1333,16 @@ namespace AssetStudio.Extraction.Core.Services
                 ix * qw + iw * -qx + iy * -qz - iz * -qy,
                 iy * qw + iw * -qy + iz * -qx - ix * -qz,
                 iz * qw + iw * -qz + ix * -qy - iy * -qx
+            };
+        }
+
+        private static float[] MultiplyVectorComponents(float[] vector, float[] multiplier)
+        {
+            return new[]
+            {
+                vector[0] * multiplier[0],
+                vector[1] * multiplier[1],
+                vector[2] * multiplier[2]
             };
         }
 
@@ -1617,6 +1715,13 @@ namespace AssetStudio.Extraction.Core.Services
 
                 try
                 {
+                    var materialName = material.Name ?? "Material";
+                    var textureKeys = material.m_SavedProperties?.m_TexEnvs?
+                        .Select(entry => entry.Key)
+                        .Where(key => !string.IsNullOrWhiteSpace(key))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray() ?? Array.Empty<string>();
+
                     var baseColor = GetMaterialColor(material, "_BaseColor", "_Color") ?? new[] { 1f, 1f, 1f, 1f };
                     var metallic = GetMaterialFloat(material, 0f, "_Metallic", "_Metalness");
                     var smoothness = GetMaterialFloat(material, 0.5f, "_Glossiness", "_Smoothness");
@@ -1629,9 +1734,18 @@ namespace AssetStudio.Extraction.Core.Services
                         ref totalTextureBytes,
                         ref skippedByCap,
                         ref decodeFailures,
+                        out var resolvedAlbedoKey,
+                        allowAnyFallback: true,
                         "_BaseMap",
+                        "_BaseColorMap",
+                        "_BaseColorTexture",
+                        "_ColorMap",
+                        "_MainColorMap",
                         "_MainTex",
-                        "_DiffuseMap");
+                        "_DiffuseMap",
+                        "_AlbedoMap",
+                        "_BaseTex",
+                        "_Tex");
 
                     var normalTextureIndex = ResolveMaterialTextureIndex(
                         material,
@@ -1640,12 +1754,28 @@ namespace AssetStudio.Extraction.Core.Services
                         ref totalTextureBytes,
                         ref skippedByCap,
                         ref decodeFailures,
+                        out var resolvedNormalKey,
+                        allowAnyFallback: false,
                         "_BumpMap",
-                        "_NormalMap");
+                        "_NormalMap",
+                        "_DetailNormalMap",
+                        "_NormalTexture");
+
+                    if (albedoTextureIndex < 0 && textureKeys.Length > 0)
+                    {
+                        var keyPreview = string.Join(", ", textureKeys.Take(8));
+                        Log("info", $"Material '{materialName}' has no resolved albedo texture. Available keys: [{keyPreview}]");
+                    }
+
+                    if (textureKeys.Length > 0)
+                    {
+                        var keyPreview = string.Join(", ", textureKeys.Take(10));
+                        Log("info", $"Material '{materialName}': albedoIndex={albedoTextureIndex}, albedoKey={resolvedAlbedoKey ?? "none"}, normalIndex={normalTextureIndex}, normalKey={resolvedNormalKey ?? "none"}, texKeys=[{keyPreview}]");
+                    }
 
                     var materialData = new ExtractionSceneData.MaterialData
                     {
-                        Name = material.Name ?? "Material",
+                        Name = materialName,
                         TextureIndex = albedoTextureIndex,
                         AlbedoTextureIndex = albedoTextureIndex,
                         NormalTextureIndex = normalTextureIndex,
@@ -1709,6 +1839,7 @@ namespace AssetStudio.Extraction.Core.Services
         private Dictionary<string, MeshTransformData> BuildMeshTransformMap(AssetsManager manager)
         {
             var map = new Dictionary<string, MeshTransformData>(StringComparer.Ordinal);
+            var transformWorldByKey = new Dictionary<string, MeshTransformData>(StringComparer.Ordinal);
             var gameObjects = manager.assetsFileList
                 .SelectMany(f => f.Objects.OfType<GameObject>() ?? new List<GameObject>())
                 .ToList();
@@ -1730,15 +1861,75 @@ namespace AssetStudio.Extraction.Core.Services
                     continue;
 
                 var transform = gameObject.m_Transform;
-                map[meshKey] = new MeshTransformData
-                {
-                    Position = new[] { transform.m_LocalPosition.X, transform.m_LocalPosition.Y, transform.m_LocalPosition.Z },
-                    Rotation = new[] { transform.m_LocalRotation.X, transform.m_LocalRotation.Y, transform.m_LocalRotation.Z, transform.m_LocalRotation.W },
-                    Scale = new[] { transform.m_LocalScale.X, transform.m_LocalScale.Y, transform.m_LocalScale.Z }
-                };
+                var world = ComputeTransformWorld(transform, transformWorldByKey, new HashSet<string>(StringComparer.Ordinal));
+                if (world == null)
+                    continue;
+
+                map[meshKey] = world;
             }
 
             return map;
+        }
+
+        private MeshTransformData? ComputeTransformWorld(
+            Transform transform,
+            Dictionary<string, MeshTransformData> cache,
+            HashSet<string> activeStack)
+        {
+            if (transform == null)
+                return null;
+
+            var transformKey = GetObjectKey(transform);
+            if (string.IsNullOrWhiteSpace(transformKey))
+                return CreateLocalTransformData(transform);
+
+            if (cache.TryGetValue(transformKey, out var cached))
+                return cached;
+
+            if (!activeStack.Add(transformKey))
+                return CreateLocalTransformData(transform);
+
+            try
+            {
+                var local = CreateLocalTransformData(transform);
+                if (transform.m_Father != null && transform.m_Father.TryGet(out var parentTransform) && parentTransform != null)
+                {
+                    var parentWorld = ComputeTransformWorld(parentTransform, cache, activeStack);
+                    if (parentWorld != null)
+                    {
+                        var scaledLocal = MultiplyVectorComponents(local.Position, parentWorld.Scale);
+                        var rotatedLocal = RotateVectorByQuaternion(scaledLocal, parentWorld.Rotation);
+                        local = new MeshTransformData
+                        {
+                            Position = new[]
+                            {
+                                parentWorld.Position[0] + rotatedLocal[0],
+                                parentWorld.Position[1] + rotatedLocal[1],
+                                parentWorld.Position[2] + rotatedLocal[2]
+                            },
+                            Rotation = MultiplyQuaternions(parentWorld.Rotation, local.Rotation),
+                            Scale = MultiplyVectorComponents(local.Scale, parentWorld.Scale)
+                        };
+                    }
+                }
+
+                cache[transformKey] = local;
+                return local;
+            }
+            finally
+            {
+                activeStack.Remove(transformKey);
+            }
+        }
+
+        private static MeshTransformData CreateLocalTransformData(Transform transform)
+        {
+            return new MeshTransformData
+            {
+                Position = new[] { transform.m_LocalPosition.X, transform.m_LocalPosition.Y, transform.m_LocalPosition.Z },
+                Rotation = new[] { transform.m_LocalRotation.X, transform.m_LocalRotation.Y, transform.m_LocalRotation.Z, transform.m_LocalRotation.W },
+                Scale = new[] { transform.m_LocalScale.X, transform.m_LocalScale.Y, transform.m_LocalScale.Z }
+            };
         }
 
         private static bool TryGetRenderer(GameObject gameObject, out Renderer renderer)
@@ -1798,42 +1989,67 @@ namespace AssetStudio.Extraction.Core.Services
             ref int totalTextureBytes,
             ref int skippedByCap,
             ref int decodeFailures,
+            out string? matchedTextureKey,
+            bool allowAnyFallback,
             params string[] textureKeys)
         {
-            if (!TryGetMaterialTexture(material, out var texture, textureKeys))
-                return -1;
-
-            var textureKey = GetObjectKey(texture);
-            if (textureIndexByObjectKey.TryGetValue(textureKey, out var existingIndex))
-                return existingIndex;
-
-            if (!TryCreateTextureData(texture, out var textureData, out var encodedSize))
+            matchedTextureKey = null;
+            var materialName = material?.Name ?? "Material";
+            foreach (var candidate in EnumerateMaterialTextures(material, allowAnyFallback, textureKeys))
             {
-                decodeFailures++;
-                return -1;
+                var texture = candidate.Texture;
+                var textureKey = GetObjectKey(texture);
+                if (textureIndexByObjectKey.TryGetValue(textureKey, out var existingIndex))
+                {
+                    matchedTextureKey = candidate.Key;
+                    return existingIndex;
+                }
+
+                if (!TryCreateTextureData(texture, out var textureData, out var encodedSize))
+                {
+                    decodeFailures++;
+                    var streamPath = texture.m_StreamData?.path;
+                    var streamSize = texture.image_data?.Size ?? 0;
+                    var streamOffset = texture.m_StreamData?.offset ?? 0;
+                    var streamLabel = string.IsNullOrWhiteSpace(streamPath) ? "embedded" : streamPath;
+                    var versionLabel = texture.version != null && texture.version.Length >= 2
+                        ? $"{texture.version[0]}.{texture.version[1]}"
+                        : "unknown";
+                    var signature = GetTextureDataSignature(texture);
+                    Log("warn", $"Texture decode failed for material '{materialName}', key '{candidate.Key}', texture '{texture.Name}', format '{texture.m_TextureFormat}' ({texture.m_Width}x{texture.m_Height}), unity={versionLabel}, platform={texture.platform}, dataSize={streamSize}, streamOffset={streamOffset}, stream='{streamLabel}', signature='{signature}'");
+                    continue;
+                }
+
+                if (sceneData.Textures.Count >= maxTextureCount ||
+                    encodedSize > maxTextureBytesPerTexture ||
+                    totalTextureBytes + encodedSize > maxTextureBytesTotal)
+                {
+                    skippedByCap++;
+                    Log("warn", $"Skipped texture for material '{materialName}', key '{candidate.Key}' due to texture safety caps");
+                    continue;
+                }
+
+                var textureIndex = sceneData.Textures.Count;
+                sceneData.Textures.Add(textureData);
+                textureIndexByObjectKey[textureKey] = textureIndex;
+                totalTextureBytes += encodedSize;
+                matchedTextureKey = candidate.Key;
+                return textureIndex;
             }
 
-            if (sceneData.Textures.Count >= maxTextureCount ||
-                encodedSize > maxTextureBytesPerTexture ||
-                totalTextureBytes + encodedSize > maxTextureBytesTotal)
-            {
-                skippedByCap++;
-                return -1;
-            }
-
-            var textureIndex = sceneData.Textures.Count;
-            sceneData.Textures.Add(textureData);
-            textureIndexByObjectKey[textureKey] = textureIndex;
-            totalTextureBytes += encodedSize;
-
-            return textureIndex;
+            return -1;
         }
 
-        private static bool TryGetMaterialTexture(Material material, out Texture2D texture, params string[] keys)
+        private static List<(string Key, Texture2D Texture)> EnumerateMaterialTextures(
+            Material material,
+            bool allowAnyFallback,
+            params string[] keys)
         {
-            texture = null;
+            var results = new List<(string Key, Texture2D Texture)>();
+            var seenTextureKeys = new HashSet<string>(StringComparer.Ordinal);
+
             if (material?.m_SavedProperties?.m_TexEnvs == null || keys == null || keys.Length == 0)
-                return false;
+                return results;
 
             foreach (var key in keys)
             {
@@ -1842,14 +2058,52 @@ namespace AssetStudio.Extraction.Core.Services
                 if (string.IsNullOrWhiteSpace(texEnv.Key))
                     continue;
 
-                if (texEnv.Value?.m_Texture != null && texEnv.Value.m_Texture.TryGet<Texture2D>(out var resolvedTexture))
-                {
-                    texture = resolvedTexture;
-                    return true;
-                }
+                if (texEnv.Value?.m_Texture == null || !texEnv.Value.m_Texture.TryGet<Texture2D>(out var resolvedTexture))
+                    continue;
+
+                var objectKey = GetObjectKey(resolvedTexture);
+                if (!seenTextureKeys.Add(objectKey))
+                    continue;
+
+                results.Add((texEnv.Key, resolvedTexture));
             }
 
-            return false;
+            if (!allowAnyFallback)
+                return results;
+
+            foreach (var texEnv in material.m_SavedProperties.m_TexEnvs)
+            {
+                if (string.IsNullOrWhiteSpace(texEnv.Key) || IsNonAlbedoTextureKey(texEnv.Key))
+                    continue;
+
+                if (texEnv.Value?.m_Texture == null || !texEnv.Value.m_Texture.TryGet<Texture2D>(out var resolvedTexture))
+                    continue;
+
+                var objectKey = GetObjectKey(resolvedTexture);
+                if (!seenTextureKeys.Add(objectKey))
+                    continue;
+
+                results.Add((texEnv.Key, resolvedTexture));
+            }
+
+            return results;
+        }
+
+        private static bool IsNonAlbedoTextureKey(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                return false;
+
+            return key.Contains("normal", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("bump", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("metal", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("rough", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("smooth", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("spec", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("occlusion", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("height", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("mask", StringComparison.OrdinalIgnoreCase) ||
+                   key.Contains("emission", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryCreateTextureData(Texture2D texture, out ExtractionSceneData.TextureData textureData, out int encodedSize)
@@ -1979,6 +2233,25 @@ namespace AssetStudio.Extraction.Core.Services
                 default:
                     logger.Info(message);
                     break;
+            }
+        }
+
+        private static string GetTextureDataSignature(Texture2D texture)
+        {
+            try
+            {
+                var data = texture?.image_data?.GetData();
+                if (data == null || data.Length == 0)
+                    return "empty";
+
+                var head = data.Take(16).ToArray();
+                var hex = BitConverter.ToString(head);
+                var ascii = new string(head.Select(value => value >= 32 && value <= 126 ? (char)value : '.').ToArray());
+                return $"hex={hex};ascii={ascii}";
+            }
+            catch
+            {
+                return "unavailable";
             }
         }
 

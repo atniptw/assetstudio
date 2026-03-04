@@ -6,6 +6,7 @@
 @inject ModStorageService ModStorage
 @inject AssetExtractor Extractor
 @implements IDisposable
+@using System.Collections.Generic
 @using System.IO
 @using System.Text.Json
 @using System.Text.Json.Serialization
@@ -279,7 +280,34 @@
 		try
 		{
 			var bytes = Convert.FromBase64String(item.DataBase64);
-			var avatarData = await Extractor.ExtractStaticAssetAsync(bytes, item.FileName);
+			var companionFiles = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+			if (item.CompanionFiles != null)
+			{
+				foreach (var companion in item.CompanionFiles)
+				{
+					if (string.IsNullOrWhiteSpace(companion.DataBase64))
+					{
+						continue;
+					}
+
+					var companionPath = !string.IsNullOrWhiteSpace(companion.ArchivePath)
+						? companion.ArchivePath
+						: companion.FileName;
+
+					if (string.IsNullOrWhiteSpace(companionPath))
+					{
+						continue;
+					}
+
+					if (!companionFiles.ContainsKey(companionPath))
+					{
+						companionFiles[companionPath] = Convert.FromBase64String(companion.DataBase64);
+					}
+				}
+			}
+
+			Diagnostics.Add("info", $"Using {companionFiles.Count} companion files for {item.DisplayName}");
+			var avatarData = await Extractor.ExtractStaticAssetAsync(bytes, item.FileName, companionFiles);
 			Diagnostics.Add("info", $"Extracted {item.DisplayName}: meshes={avatarData.Meshes.Count}, materials={avatarData.Materials.Count}, textures={avatarData.Textures.Count}, anchors={avatarData.AttachmentAnchors.Count}");
 
 			if (avatarData.Meshes.Count == 0)

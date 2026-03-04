@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using AssetStudio.Extraction.Core.Abstractions;
 using AssetStudio.Extraction.Core.Models;
@@ -22,9 +23,12 @@ namespace AssetStudio.ModViewer.Services
             return MapSceneToAvatar(scene);
         }
 
-        public async Task<Models.AvatarData> ExtractStaticAssetAsync(byte[] assetBytes, string sourceName)
+        public async Task<Models.AvatarData> ExtractStaticAssetAsync(
+            byte[] assetBytes,
+            string sourceName,
+            Dictionary<string, byte[]>? companionFiles = null)
         {
-            var scene = await extractionService.ExtractStaticAssetAsync(assetBytes, sourceName, new DiagnosticsLogger(diagnostics));
+            var scene = await extractionService.ExtractStaticAssetAsync(assetBytes, sourceName, companionFiles, new DiagnosticsLogger(diagnostics));
             return MapSceneToAvatar(scene);
         }
 

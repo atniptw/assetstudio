@@ -405,6 +405,9 @@ namespace AssetStudio
 
         private bool TryDecodeDxtByteSwapped(byte[] source, byte[] outBuffer, bool isDxt1)
         {
+            if (platform != BuildTarget.XBOX360)
+                return false;
+
             if (source.Length < 2)
                 return false;
 

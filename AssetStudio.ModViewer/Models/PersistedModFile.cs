@@ -1,9 +1,19 @@
 using System;
+using System.Collections.Generic;
 
 namespace AssetStudio.ModViewer.Models
 {
     public class PersistedModFile
     {
+        public class CompanionFilePayload
+        {
+            public string FileName { get; set; } = string.Empty;
+            public string ArchivePath { get; set; } = string.Empty;
+            public long SizeBytes { get; set; }
+            public string DataBase64 { get; set; } = string.Empty;
+            public string Sha256 { get; set; } = string.Empty;
+        }
+
         public string Id { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public string ArchivePath { get; set; } = string.Empty;
@@ -14,6 +24,7 @@ namespace AssetStudio.ModViewer.Models
         public string DataBase64 { get; set; } = string.Empty;
         public string Sha256 { get; set; } = string.Empty;
         public DateTime ImportedAtUtc { get; set; }
+        public List<CompanionFilePayload> CompanionFiles { get; set; } = new();
         public bool Enabled { get; set; }
     }
 }

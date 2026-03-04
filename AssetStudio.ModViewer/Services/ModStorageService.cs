@@ -24,6 +24,7 @@ namespace AssetStudio.ModViewer.Services
                 .Select(file =>
                 {
                     file.Enabled = false;
+                    file.CompanionFiles ??= new List<PersistedModFile.CompanionFilePayload>();
                     return file;
                 })
                 .OrderByDescending(file => file.ImportedAtUtc)
@@ -44,6 +45,14 @@ namespace AssetStudio.ModViewer.Services
                 DataBase64 = item.DataBase64,
                 Sha256 = item.Sha256,
                 ImportedAtUtc = item.ImportedAtUtc,
+                CompanionFiles = item.CompanionFiles.Select(companion => new PersistedModFile.CompanionFilePayload
+                {
+                    FileName = companion.FileName,
+                    ArchivePath = companion.ArchivePath,
+                    SizeBytes = companion.SizeBytes,
+                    DataBase64 = companion.DataBase64,
+                    Sha256 = companion.Sha256
+                }).ToList(),
                 Enabled = false
             }).ToList();
 
