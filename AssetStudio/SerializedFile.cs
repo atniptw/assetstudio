@@ -104,14 +104,14 @@ namespace AssetStudio
                 m_TargetPlatform = (BuildTarget)reader.ReadInt32();
                 if (!Enum.IsDefined(typeof(BuildTarget), m_TargetPlatform))
                 {
-                    Logger.Verbose($"Parsed target format {m_TargetPlatform} doesn't match any of supported formats, defaulting to {BuildTarget.UnknownPlatform}");
-                    m_TargetPlatform = BuildTarget.UnknownPlatform;
+                    throw new InvalidDataException($"Unsupported target platform value '{m_TargetPlatform}' in serialized file '{fileName}'");
                 }
-                else if (m_TargetPlatform == BuildTarget.NoTarget && game.Type.IsMhyGroup())
+
+                if (m_TargetPlatform == BuildTarget.NoTarget)
                 {
-                    Logger.Verbose($"Selected game {game.Name} is a mhy game, forcing target format {BuildTarget.StandaloneWindows64}");
-                    m_TargetPlatform = BuildTarget.StandaloneWindows64;
+                    throw new InvalidDataException($"Ambiguous target platform '{BuildTarget.NoTarget}' in serialized file '{fileName}'");
                 }
+
                 Logger.Verbose($"Target format {m_TargetPlatform}");
             }
             if (header.m_Version >= SerializedFileFormatVersion.HasTypeTreeHashes)

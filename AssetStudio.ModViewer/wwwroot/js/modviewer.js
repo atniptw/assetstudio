@@ -1,7 +1,18 @@
-import * as THREE from "https://esm.sh/three@0.160.1";
-import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/controls/OrbitControls.js";
-
 (function () {
+    let THREE = null;
+    let OrbitControls = null;
+
+    async function ensureThreeReady() {
+        if (THREE && OrbitControls) {
+            return;
+        }
+
+        const threeModule = await import("https://esm.sh/three@0.160.1");
+        const controlsModule = await import("https://esm.sh/three@0.160.1/examples/jsm/controls/OrbitControls.js");
+        THREE = threeModule;
+        OrbitControls = controlsModule.OrbitControls;
+    }
+
     const MOD_DB_NAME = "modviewer-mods";
     const MOD_DB_VERSION = 1;
     const MOD_STORE = "hhhFiles";
@@ -15,7 +26,14 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
         avatarGroup: null,
         modGroups: new Map(),
         anchorNodes: new Map(),
+        anchorMetadata: new Map(),
         avatarMeshCount: 0,
+        transformToggles: {
+            modelFlipX: false,
+            modelFlipY: false,
+            textureFlipX: false,
+            textureFlipY: false,
+        },
     };
 
     const DEFAULT_ANCHOR_TAGS = ["head", "neck", "body", "hip", "leftarm", "rightarm", "leftleg", "rightleg", "world"];
@@ -41,7 +59,9 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
         });
     }
 
-    function init(canvasId) {
+    async function init(canvasId) {
+        await ensureThreeReady();
+
         const canvas = document.getElementById(canvasId);
         if (!canvas) {
             return;
@@ -299,8 +319,83 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
         return group;
     }
 
+    function applyTextureAxisFlip(texture) {
+        if (!texture) {
+            return;
+        }
+
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.x = state.transformToggles.textureFlipX ? -1 : 1;
+        texture.repeat.y = state.transformToggles.textureFlipY ? -1 : 1;
+        texture.offset.x = state.transformToggles.textureFlipX ? 1 : 0;
+        texture.offset.y = state.transformToggles.textureFlipY ? 1 : 0;
+        texture.needsUpdate = true;
+    }
+
+    function applyMaterialAxisFlips(material) {
+        if (!material) {
+            return;
+        }
+
+        applyTextureAxisFlip(material.map);
+        applyTextureAxisFlip(material.normalMap);
+        material.needsUpdate = true;
+    }
+
+    function applyModelAxisFlips(modGroup) {
+        if (!modGroup) {
+            return;
+        }
+
+        if (!modGroup.userData.baseScale) {
+            modGroup.userData.baseScale = modGroup.scale.clone();
+        }
+
+        const baseScale = modGroup.userData.baseScale;
+        const xSign = state.transformToggles.modelFlipX ? -1 : 1;
+        const ySign = state.transformToggles.modelFlipY ? -1 : 1;
+        modGroup.scale.set(baseScale.x * xSign, baseScale.y * ySign, baseScale.z);
+    }
+
+    function applyModGroupToggles(modGroup) {
+        if (!modGroup) {
+            return;
+        }
+
+        applyModelAxisFlips(modGroup);
+        modGroup.traverse((node) => {
+            if (!node || !node.material) {
+                return;
+            }
+
+            if (Array.isArray(node.material)) {
+                node.material.forEach((material) => applyMaterialAxisFlips(material));
+                return;
+            }
+
+            applyMaterialAxisFlips(node.material);
+        });
+    }
+
+    function applyAllModGroupToggles() {
+        for (const [, modGroup] of state.modGroups) {
+            applyModGroupToggles(modGroup);
+        }
+    }
+
+    function setTransformToggles(toggles) {
+        const next = toggles || {};
+        state.transformToggles.modelFlipX = !!next.modelFlipX;
+        state.transformToggles.modelFlipY = !!next.modelFlipY;
+        state.transformToggles.textureFlipX = !!next.textureFlipX;
+        state.transformToggles.textureFlipY = !!next.textureFlipY;
+        applyAllModGroupToggles();
+    }
+
     function rebuildAnchorNodes(avatarData) {
         state.anchorNodes.clear();
+        state.anchorMetadata.clear();
         if (!state.avatarGroup) {
             return;
         }
@@ -315,6 +410,10 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
 
         DEFAULT_ANCHOR_TAGS.forEach((tag) => {
             const anchorData = anchorsByTag.get(tag);
+            if (!anchorData || anchorData.sourceType === "missing-explicit-anchor") {
+                return;
+            }
+
             const node = new THREE.Group();
             node.name = `Anchor_${tag}`;
 
@@ -330,7 +429,117 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
 
             state.avatarGroup.add(node);
             state.anchorNodes.set(tag, node);
+            state.anchorMetadata.set(tag, {
+                sourceType: anchorData?.sourceType || null,
+                sourceName: anchorData?.sourceName || null,
+                sourcePath: anchorData?.sourcePath || null,
+                confidence: anchorData?.confidence || null,
+            });
         });
+    }
+
+    function applyModRenderSafety(modGroup) {
+        if (!modGroup) {
+            return;
+        }
+
+        modGroup.traverse((node) => {
+            if (!node || !node.isMesh) {
+                return;
+            }
+
+            // Keep accessory meshes from being dropped by overly aggressive culling.
+            node.frustumCulled = false;
+
+            const applyMaterialSafety = (material) => {
+                if (!material) {
+                    return;
+                }
+
+                material.side = THREE.DoubleSide;
+                if (material.transparent && (typeof material.opacity !== "number" || material.opacity <= 0.01)) {
+                    material.transparent = false;
+                    material.opacity = 1;
+                }
+                material.needsUpdate = true;
+            };
+
+            if (Array.isArray(node.material)) {
+                node.material.forEach(applyMaterialSafety);
+                return;
+            }
+
+            applyMaterialSafety(node.material);
+        });
+    }
+
+    function collectModDiagnostics(modGroup) {
+        const details = {
+            meshVisibleCount: 0,
+            meshFrustumCulledCount: 0,
+            meshVertexCount: 0,
+            minAxisSize: null,
+            modWorldCenter: null,
+            modWorldDistanceToCamera: null,
+            materialModes: [],
+        };
+
+        if (!modGroup) {
+            return details;
+        }
+
+        const box = new THREE.Box3().setFromObject(modGroup);
+        const worldCenter = box.getCenter(new THREE.Vector3());
+        const worldSize = box.getSize(new THREE.Vector3());
+        details.modWorldCenter = [worldCenter.x, worldCenter.y, worldCenter.z];
+        details.minAxisSize = Math.min(worldSize.x, worldSize.y, worldSize.z);
+
+        if (state.camera) {
+            details.modWorldDistanceToCamera = worldCenter.distanceTo(state.camera.position);
+        }
+
+        const materialModes = new Set();
+        modGroup.traverse((node) => {
+            if (!node || !node.isMesh) {
+                return;
+            }
+
+            if (node.visible) {
+                details.meshVisibleCount += 1;
+            }
+            if (node.frustumCulled) {
+                details.meshFrustumCulledCount += 1;
+            }
+
+            const positionAttribute = node.geometry?.attributes?.position;
+            if (positionAttribute && typeof positionAttribute.count === "number") {
+                details.meshVertexCount += positionAttribute.count;
+            }
+
+            const summarizeMaterial = (material) => {
+                if (!material) {
+                    return;
+                }
+
+                const side = material.side === THREE.DoubleSide
+                    ? "double"
+                    : material.side === THREE.BackSide
+                        ? "back"
+                        : "front";
+                const mode = `${material.type || "Material"}:side=${side},transparent=${!!material.transparent},opacity=${Number(material.opacity ?? 1).toFixed(3)}`;
+                materialModes.add(mode);
+            };
+
+            if (Array.isArray(node.material)) {
+                node.material.forEach(summarizeMaterial);
+                return;
+            }
+
+            summarizeMaterial(node.material);
+        });
+
+        details.materialModes = Array.from(materialModes);
+        return details;
     }
 
     function addModAsset(modId, avatarJsonStr, bodyPartTag) {
@@ -340,6 +549,11 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
                 reason: "scene-or-avatar-missing",
                 anchorTag: null,
                 anchorFound: false,
+                placementMode: "none",
+                parentNodeName: null,
+                localPosition: null,
+                localRotation: null,
+                localScale: null,
                 modGroupCount: state.modGroups.size,
                 meshCount: 0,
                 boundsCenter: null,
@@ -360,6 +574,11 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
                 reason: "no-meshes",
                 anchorTag: null,
                 anchorFound: false,
+                placementMode: "none",
+                parentNodeName: null,
+                localPosition: null,
+                localRotation: null,
+                localScale: null,
                 modGroupCount: state.modGroups.size,
                 meshCount: 0,
                 boundsCenter: null,
@@ -367,15 +586,53 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
             };
         }
 
+        const tag = typeof bodyPartTag === "string" ? bodyPartTag.toLowerCase() : "world";
+        const anchor = state.anchorNodes.get(tag);
+        const anchorMeta = state.anchorMetadata.get(tag) || null;
+        const anchorFound = !!anchor && !!anchorMeta && anchorMeta.sourceType !== "missing-explicit-anchor";
+        if (!anchorFound) {
+            return {
+                added: false,
+                reason: "missing-explicit-anchor",
+                anchorTag: tag,
+                anchorFound: false,
+                placementMode: "none",
+                parentNodeName: null,
+                localPosition: null,
+                localRotation: null,
+                localScale: null,
+                modGroupCount: state.modGroups.size,
+                meshCount: modGroup.children.length,
+                boundsCenter: null,
+                boundsSize: null,
+            };
+        }
+
+        const targetAnchorPosition = anchorFound
+            ? [anchor.position.x, anchor.position.y, anchor.position.z]
+            : null;
+        const targetAnchorWorldPosition = (() => {
+            if (!anchorFound) {
+                return null;
+            }
+
+            const world = new THREE.Vector3();
+            anchor.getWorldPosition(world);
+            return [world.x, world.y, world.z];
+        })();
+
+        applyModGroupToggles(modGroup);
+        applyModRenderSafety(modGroup);
+
+        const parent = anchor;
+        parent.add(modGroup);
+
+        const renderDiagnostics = collectModDiagnostics(modGroup);
+
         const box = new THREE.Box3().setFromObject(modGroup);
         const boundsCenter = box.getCenter(new THREE.Vector3());
         const boundsSize = box.getSize(new THREE.Vector3());
 
-        const tag = typeof bodyPartTag === "string" ? bodyPartTag.toLowerCase() : "world";
-        const anchor = state.anchorNodes.get(tag);
-        const anchorFound = !!anchor;
-        const parent = anchor || state.avatarGroup;
-        parent.add(modGroup);
         state.modGroups.set(modId, modGroup);
 
         return {
@@ -383,10 +640,28 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
             reason: "ok",
             anchorTag: tag,
             anchorFound,
+            placementMode: "tag-parent-direct",
+            parentNodeName: parent?.name || null,
+            targetAnchorPosition,
+            targetAnchorWorldPosition,
+            anchorSourceType: anchorMeta?.sourceType || null,
+            anchorSourceName: anchorMeta?.sourceName || null,
+            anchorSourcePath: anchorMeta?.sourcePath || null,
+            anchorConfidence: anchorMeta?.confidence || null,
+            localPosition: [modGroup.position.x, modGroup.position.y, modGroup.position.z],
+            localRotation: [modGroup.quaternion.x, modGroup.quaternion.y, modGroup.quaternion.z, modGroup.quaternion.w],
+            localScale: [modGroup.scale.x, modGroup.scale.y, modGroup.scale.z],
             modGroupCount: state.modGroups.size,
             meshCount: modGroup.children.length,
             boundsCenter: [boundsCenter.x, boundsCenter.y, boundsCenter.z],
             boundsSize: [boundsSize.x, boundsSize.y, boundsSize.z],
+            modWorldCenter: renderDiagnostics.modWorldCenter,
+            modWorldDistanceToCamera: renderDiagnostics.modWorldDistanceToCamera,
+            meshVisibleCount: renderDiagnostics.meshVisibleCount,
+            meshFrustumCulledCount: renderDiagnostics.meshFrustumCulledCount,
+            meshVertexCount: renderDiagnostics.meshVertexCount,
+            minAxisSize: renderDiagnostics.minAxisSize,
+            materialModes: renderDiagnostics.materialModes,
         };
     }
 
@@ -526,6 +801,7 @@ import { OrbitControls } from "https://esm.sh/three@0.160.1/examples/jsm/control
     window.modViewer = {
         init,
         renderAvatar,
+        setTransformToggles,
         addModAsset,
         removeModAsset,
         clearModAssets,

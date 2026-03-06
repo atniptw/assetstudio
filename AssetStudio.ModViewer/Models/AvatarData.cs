@@ -56,6 +56,10 @@ namespace AssetStudio.ModViewer.Models
             public float[] Position { get; set; } = { 0f, 0f, 0f };
             public float[] Rotation { get; set; } = { 0f, 0f, 0f, 1f };
             public float[] Scale { get; set; } = { 1f, 1f, 1f };
+            public string? SourceType { get; set; }
+            public string? SourceName { get; set; }
+            public string? SourcePath { get; set; }
+            public string? Confidence { get; set; }
         }
 
         public string Name { get; set; }

@@ -26,9 +26,10 @@ namespace AssetStudio.ModViewer.Services
         public async Task<Models.AvatarData> ExtractStaticAssetAsync(
             byte[] assetBytes,
             string sourceName,
+            string? bodyPartTag = null,
             Dictionary<string, byte[]>? companionFiles = null)
         {
-            var scene = await extractionService.ExtractStaticAssetAsync(assetBytes, sourceName, companionFiles, new DiagnosticsLogger(diagnostics));
+            var scene = await extractionService.ExtractStaticAssetAsync(assetBytes, sourceName, bodyPartTag, companionFiles, new DiagnosticsLogger(diagnostics));
             return MapSceneToAvatar(scene);
         }
 
@@ -81,7 +82,11 @@ namespace AssetStudio.ModViewer.Services
                     Tag = anchor.Tag,
                     Position = anchor.Position,
                     Rotation = anchor.Rotation,
-                    Scale = anchor.Scale
+                    Scale = anchor.Scale,
+                    SourceType = anchor.SourceType,
+                    SourceName = anchor.SourceName,
+                    SourcePath = anchor.SourcePath,
+                    Confidence = anchor.Confidence
                 }).ToList()
             };
         }

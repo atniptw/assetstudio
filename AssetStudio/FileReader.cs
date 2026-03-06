@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
@@ -19,6 +20,14 @@ namespace AssetStudio
         private static readonly byte[] blbMagic = { 0x42, 0x6C, 0x62, 0x02 };
         private static readonly byte[] narakaMagic = { 0x15, 0x1E, 0x1C, 0x0D, 0x0D, 0x23, 0x21 };
         private static readonly byte[] gunfireMagic = { 0x7C, 0x6D, 0x79, 0x72, 0x27, 0x7A, 0x73, 0x78, 0x3F };
+        private static readonly HashSet<string> knownResourceExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".res",
+            ".ress",
+            ".resS",
+            ".resource",
+            ".bundle"
+        };
 
 
         public FileReader(string path) : this(path, File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) { }
@@ -108,8 +117,15 @@ namespace AssetStudio
                             return FileType.BundleFile;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(gunfireMagic)}");
-                        Logger.Verbose($"Parsed signature does not match any of the supported signatures, assuming resource file");
-                        return FileType.ResourceFile;
+
+                        var extension = Path.GetExtension(FileName);
+                        if (!string.IsNullOrEmpty(extension) && knownResourceExtensions.Contains(extension))
+                        {
+                            Logger.Verbose($"Unknown signature but known resource extension '{extension}', treating as resource file");
+                            return FileType.ResourceFile;
+                        }
+
+                        throw new InvalidDataException($"Unsupported or unknown file signature for '{FileName}'");
                     }
             }
         }
@@ -165,6 +181,12 @@ namespace AssetStudio
             Logger.Verbose($"Applying preprocessing to file {reader.FileName}");
             if (reader.FileType == FileType.ResourceFile || !game.Type.IsNormal())
             {
+                if (IsUnityFsStream(reader))
+                {
+                    Logger.Verbose("Detected UnityFS signature before preprocessing; skipping decryption path");
+                    return reader;
+                }
+
                 Logger.Verbose("File is encrypted !!");
                 switch (game.Type)
                 {
@@ -229,29 +251,33 @@ namespace AssetStudio
                         break;
                 }
             }
-            if (reader.FileType == FileType.BundleFile && game.Type.IsBlockFile() || reader.FileType == FileType.ENCRFile || reader.FileType == FileType.BlbFile)
-            {
-                Logger.Verbose("File might have multiple bundles !!");
-                try
-                {
-                    var signature = reader.ReadStringToNull();
-                    reader.ReadInt32();
-                    reader.ReadStringToNull();
-                    reader.ReadStringToNull();
-                    var size = reader.ReadInt64();
-                    if (size != reader.BaseStream.Length)
-                    {
-                        Logger.Verbose($"Found signature {signature}, expected bundle size is 0x{size:X8}, found 0x{reader.BaseStream.Length} instead !!");
-                        Logger.Verbose("Loading as block file !!");
-                        reader.FileType = FileType.BlockFile;
-                    }
-                }
-                catch (Exception) { }
-                reader.Position = 0;
-            }
-
             Logger.Verbose("No preprocessing is needed");
             return reader;
+
+            static bool IsUnityFsStream(FileReader reader)
+            {
+                var originalPosition = reader.Position;
+                try
+                {
+                    if (reader.Length < 7)
+                        return false;
+
+                    reader.Position = 0;
+                    var signatureBytes = reader.ReadBytes(7);
+                    return signatureBytes.Length == 7 &&
+                           signatureBytes[0] == (byte)'U' &&
+                           signatureBytes[1] == (byte)'n' &&
+                           signatureBytes[2] == (byte)'i' &&
+                           signatureBytes[3] == (byte)'t' &&
+                           signatureBytes[4] == (byte)'y' &&
+                           signatureBytes[5] == (byte)'F' &&
+                           signatureBytes[6] == (byte)'S';
+                }
+                finally
+                {
+                    reader.Position = originalPosition;
+                }
+            }
         }
     } 
 }

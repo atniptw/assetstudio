@@ -138,6 +138,7 @@ namespace AssetStudio.Extraction.Core.Services
         public async Task<ExtractionSceneData> ExtractStaticAssetAsync(
             byte[] assetBytes,
             string sourceName,
+            string? bodyPartTag = null,
             Dictionary<string, byte[]>? companionFiles = null,
             IExtractionLogger? logger = null)
         {
@@ -177,7 +178,7 @@ namespace AssetStudio.Extraction.Core.Services
 
                 Log("info", $"Extracting static asset: {key} ({assetBytes.Length:N0} bytes)");
                 Log("info", $"Static extraction context includes {assetFiles.Count} files");
-                await LoadStaticAssetIntoSceneData(assetFiles, sceneData);
+                await LoadStaticAssetIntoSceneData(assetFiles, sceneData, bodyPartTag);
                 PopulateAttachmentAnchors(sceneData);
 
                 timer.Stop();
@@ -194,7 +195,7 @@ namespace AssetStudio.Extraction.Core.Services
             }
         }
 
-        private async Task LoadStaticAssetIntoSceneData(Dictionary<string, byte[]> assetFiles, ExtractionSceneData sceneData)
+        private async Task LoadStaticAssetIntoSceneData(Dictionary<string, byte[]> assetFiles, ExtractionSceneData sceneData, string? bodyPartTag)
         {
             if (assetFiles == null || assetFiles.Count == 0)
                 return;
@@ -232,6 +233,7 @@ namespace AssetStudio.Extraction.Core.Services
                 Log("info", $"Loaded {manager.assetsFileList.Count} serialized files from static asset");
 
                 ExtractMeshesAndTextures(manager, sceneData);
+                NormalizeStaticMeshTransformsForTag(manager, sceneData, bodyPartTag);
                 Log("info", $"Extracted {sceneData.Materials.Count} materials and {sceneData.Textures.Count} textures");
             }
             finally
@@ -451,24 +453,9 @@ namespace AssetStudio.Extraction.Core.Services
 
                 if (sceneData.Meshes.Count == 0)
                 {
-                    var yamlMeshesByPath = ExtractYamlMeshes(assetFiles);
-                    var parsedTexturesByPath = BuildParsedTextureLookup(manager);
-                    var materialIndexByPath = ExtractYamlMaterialsAndTextures(assetFiles, pathnameByGuid, sceneData, parsedTexturesByPath);
-                    var placedMeshes = ExtractPlacedYamlMeshes(assetFiles, pathnameByGuid, yamlMeshesByPath, materialIndexByPath);
-
-                    if (placedMeshes.Count > 0)
-                    {
-                        sceneData.Meshes.AddRange(placedMeshes);
-                        Log("info", $"Fallback YAML mesh parser extracted {placedMeshes.Count} meshes with prefab transforms");
-                    }
-                    else
-                    {
-                        sceneData.Meshes.AddRange(yamlMeshesByPath.Values);
-                        if (yamlMeshesByPath.Count > 0)
-                        {
-                            Log("info", $"Fallback YAML mesh parser extracted {yamlMeshesByPath.Count} meshes");
-                        }
-                    }
+                    const string message = "No meshes were extracted via canonical parser path.";
+                    Log("error", message);
+                    throw new InvalidDataException(message);
                 }
 
                 Log("info", $"Extracted {sceneData.Materials.Count} materials and {sceneData.Textures.Count} textures");
@@ -485,17 +472,17 @@ namespace AssetStudio.Extraction.Core.Services
             "head", "neck", "body", "hip", "leftarm", "rightarm", "leftleg", "rightleg", "world"
         };
 
-        private static readonly Dictionary<string, string[]> AnchorKeywords = new(StringComparer.OrdinalIgnoreCase)
+        private static readonly Dictionary<string, string[]> ExplicitAnchorNames = new(StringComparer.OrdinalIgnoreCase)
         {
-            ["head"] = new[] { "head" },
-            ["neck"] = new[] { "neck" },
-            ["body"] = new[] { "body", "spine", "torso" },
-            ["hip"] = new[] { "hip", "pelvis" },
-            ["leftarm"] = new[] { "leftarm", "arm_l", "left arm", "l_arm", "upperarm_l" },
-            ["rightarm"] = new[] { "rightarm", "arm_r", "right arm", "r_arm", "upperarm_r" },
-            ["leftleg"] = new[] { "leftleg", "leg_l", "left leg", "l_leg", "thigh_l" },
-            ["rightleg"] = new[] { "rightleg", "leg_r", "right leg", "r_leg", "thigh_r" },
-            ["world"] = new[] { "world", "root" }
+            ["head"] = new[] { "code_head_top" },
+            ["neck"] = new[] { "code_head_bot_side" },
+            ["body"] = new[] { "ANIM BODY TOP SCALE" },
+            ["hip"] = new[] { "ANIM BODY BOT" },
+            ["leftarm"] = new[] { "code_arm_l" },
+            ["rightarm"] = new[] { "ANIM ARM R SCALE", "code_arm_r" },
+            ["leftleg"] = new[] { "ANIM LEG L TOP" },
+            ["rightleg"] = new[] { "ANIM LEG R TOP" },
+            ["world"] = new[] { "[RIG]" }
         };
 
         private void PopulateAttachmentAnchors(ExtractionSceneData sceneData)
@@ -512,96 +499,82 @@ namespace AssetStudio.Extraction.Core.Services
 
         private ExtractionSceneData.AttachmentAnchorData ResolveAnchor(ExtractionSceneData sceneData, string tag)
         {
-            var keywords = AnchorKeywords.TryGetValue(tag, out var values)
+            var explicitNames = ExplicitAnchorNames.TryGetValue(tag, out var values)
                 ? values
                 : Array.Empty<string>();
 
-            var bone = sceneData.Bones
-                .FirstOrDefault(candidate =>
-                    !string.IsNullOrWhiteSpace(candidate.Name) &&
-                    keywords.Any(keyword => candidate.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
-
-            if (bone != null)
+            if (explicitNames.Length == 0)
             {
                 return new ExtractionSceneData.AttachmentAnchorData
                 {
                     Tag = tag,
+                    SourceType = "missing-explicit-anchor",
+                    Confidence = "explicit-only"
+                };
+            }
+
+            var bone = sceneData.Bones
+                .FirstOrDefault(candidate =>
+                    !string.IsNullOrWhiteSpace(candidate.Name) &&
+                    explicitNames.Any(name => candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
+
+            if (bone != null)
+            {
+                var resolved = new ExtractionSceneData.AttachmentAnchorData
+                {
+                    Tag = tag,
                     Position = NormalizeVector3(bone.Position),
                     Rotation = NormalizeQuaternion(bone.Rotation),
-                    Scale = NormalizeScale(bone.Scale)
+                    Scale = NormalizeScale(bone.Scale),
+                    SourceType = "bone",
+                    SourceName = bone.Name,
+                    SourcePath = null,
+                    Confidence = "explicit"
                 };
+
+                Log(
+                    "info",
+                    $"Anchor '{tag}' resolved from explicit bone '{bone.Name}' pos=[{FormatVector(resolved.Position)}] rot=[{FormatVector(resolved.Rotation)}] scale=[{FormatVector(resolved.Scale)}]");
+
+                return resolved;
             }
 
             var mesh = sceneData.Meshes
                 .FirstOrDefault(candidate =>
                     !string.IsNullOrWhiteSpace(candidate.Name) &&
-                    keywords.Any(keyword => candidate.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)));
+                    explicitNames.Any(name => candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase)));
 
             if (mesh != null)
             {
-                return new ExtractionSceneData.AttachmentAnchorData
+                var resolved = new ExtractionSceneData.AttachmentAnchorData
                 {
                     Tag = tag,
                     Position = NormalizeVector3(mesh.Position),
                     Rotation = NormalizeQuaternion(mesh.Rotation),
-                    Scale = NormalizeScale(mesh.Scale)
+                    Scale = NormalizeScale(mesh.Scale),
+                    SourceType = "mesh",
+                    SourceName = mesh.Name,
+                    SourcePath = null,
+                    Confidence = "explicit"
                 };
+
+                Log(
+                    "info",
+                    $"Anchor '{tag}' resolved from explicit mesh '{mesh.Name}' pos=[{FormatVector(resolved.Position)}] rot=[{FormatVector(resolved.Rotation)}] scale=[{FormatVector(resolved.Scale)}]");
+
+                return resolved;
             }
 
-            if (TryResolveAnchorByMeshHeuristic(sceneData.Meshes, tag, out var heuristicMesh))
-            {
-                Log("info", $"Anchor '{tag}' resolved using mesh-position heuristic from '{heuristicMesh.Name}'");
-                return new ExtractionSceneData.AttachmentAnchorData
-                {
-                    Tag = tag,
-                    Position = NormalizeVector3(heuristicMesh.Position),
-                    Rotation = NormalizeQuaternion(heuristicMesh.Rotation),
-                    Scale = NormalizeScale(heuristicMesh.Scale)
-                };
-            }
-
-            Log("warn", $"Anchor '{tag}' fell back to default transform");
+            Log("warn", $"Anchor '{tag}' missing explicit anchor source");
 
             return new ExtractionSceneData.AttachmentAnchorData
             {
                 Tag = tag,
-                Position = new[] { 0f, 0f, 0f },
-                Rotation = new[] { 0f, 0f, 0f, 1f },
-                Scale = new[] { 1f, 1f, 1f }
+                SourceType = "missing-explicit-anchor",
+                SourceName = null,
+                SourcePath = null,
+                Confidence = "explicit-only"
             };
-        }
-
-        private static bool TryResolveAnchorByMeshHeuristic(
-            List<ExtractionSceneData.MeshData> meshes,
-            string tag,
-            out ExtractionSceneData.MeshData mesh)
-        {
-            mesh = null;
-            if (meshes == null || meshes.Count == 0)
-                return false;
-
-            if (string.Equals(tag, "head", StringComparison.OrdinalIgnoreCase))
-            {
-                mesh = meshes
-                    .Where(candidate => candidate?.Position != null && candidate.Position.Length >= 3)
-                    .OrderByDescending(candidate => candidate.Position[1])
-                    .FirstOrDefault();
-            }
-            else if (string.Equals(tag, "world", StringComparison.OrdinalIgnoreCase))
-            {
-                mesh = meshes
-                    .Where(candidate => candidate?.Position != null && candidate.Position.Length >= 3)
-                    .OrderBy(candidate =>
-                    {
-                        var x = candidate.Position[0];
-                        var y = candidate.Position[1];
-                        var z = candidate.Position[2];
-                        return x * x + y * y + z * z;
-                    })
-                    .FirstOrDefault();
-            }
-
-            return mesh != null;
         }
 
         private static float[] NormalizeVector3(float[]? value)
@@ -626,690 +599,6 @@ namespace AssetStudio.Extraction.Core.Services
                 return new[] { 1f, 1f, 1f };
 
             return new[] { value[0], value[1], value[2] };
-        }
-
-        private Dictionary<string, int> ExtractYamlMaterialsAndTextures(
-            Dictionary<string, byte[]> assetFiles,
-            Dictionary<string, string> pathnameByGuid,
-            ExtractionSceneData sceneData,
-            Dictionary<string, Texture2D> parsedTexturesByPath)
-        {
-            var materialIndexByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var textureIndexByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-            int totalTextureBytes = 0;
-            int skippedByCap = 0;
-            int decodeFailures = 0;
-            int missingGuidRefs = 0;
-            int missingPathMappings = 0;
-            int missingAssetEntries = 0;
-            int resolvedViaParsedTextures = 0;
-
-            foreach (var asset in assetFiles)
-            {
-                var path = asset.Key;
-                if (!path.EndsWith(".mat", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (asset.Value.Length < 8 || !(asset.Value[0] == (byte)'%' && asset.Value[1] == (byte)'Y'))
-                    continue;
-
-                try
-                {
-                    var yaml = Encoding.UTF8.GetString(asset.Value);
-                    var matName = MatchValue(yaml, @"^\s*m_Name:\s*(.+)$") ?? Path.GetFileNameWithoutExtension(path);
-                    var texEnvGuidByName = ParseYamlTexEnvGuidMap(yaml);
-
-                    var baseColor = ParseColor(yaml, "_Color") ?? new[] { 1f, 1f, 1f, 1f };
-                    var metallic = ParseFloatProperty(yaml, "_Metallic", 0f);
-                    var glossiness = ParseFloatProperty(yaml, "_Glossiness", 0.5f);
-                    var roughness = Math.Clamp(1f - glossiness, 0f, 1f);
-
-                    var albedoTextureIndex = ResolveYamlTextureIndex(
-                        yaml,
-                        pathnameByGuid,
-                        assetFiles,
-                        textureIndexByPath,
-                        sceneData,
-                        parsedTexturesByPath,
-                        ref totalTextureBytes,
-                        ref skippedByCap,
-                        ref decodeFailures,
-                        ref missingGuidRefs,
-                        ref missingPathMappings,
-                        ref missingAssetEntries,
-                        ref resolvedViaParsedTextures,
-                        "_BaseMap",
-                        "_MainTex",
-                        "_DiffuseMap");
-
-                    var normalTextureIndex = ResolveYamlTextureIndex(
-                        yaml,
-                        pathnameByGuid,
-                        assetFiles,
-                        textureIndexByPath,
-                        sceneData,
-                        parsedTexturesByPath,
-                        ref totalTextureBytes,
-                        ref skippedByCap,
-                        ref decodeFailures,
-                        ref missingGuidRefs,
-                        ref missingPathMappings,
-                        ref missingAssetEntries,
-                        ref resolvedViaParsedTextures,
-                        "_BumpMap",
-                        "_NormalMap");
-
-                    if (albedoTextureIndex < 0)
-                    {
-                        var albedoGuid = SelectYamlTexEnvGuid(texEnvGuidByName, preferNormal: false);
-                        if (!string.IsNullOrWhiteSpace(albedoGuid))
-                        {
-                            albedoTextureIndex = ResolveYamlTextureIndexByGuid(
-                                albedoGuid,
-                                pathnameByGuid,
-                                assetFiles,
-                                textureIndexByPath,
-                                sceneData,
-                                parsedTexturesByPath,
-                                ref totalTextureBytes,
-                                ref skippedByCap,
-                                ref decodeFailures,
-                                ref missingPathMappings,
-                                ref missingAssetEntries,
-                                ref resolvedViaParsedTextures);
-                        }
-                    }
-
-                    if (normalTextureIndex < 0)
-                    {
-                        var normalGuid = SelectYamlTexEnvGuid(texEnvGuidByName, preferNormal: true);
-                        if (!string.IsNullOrWhiteSpace(normalGuid))
-                        {
-                            normalTextureIndex = ResolveYamlTextureIndexByGuid(
-                                normalGuid,
-                                pathnameByGuid,
-                                assetFiles,
-                                textureIndexByPath,
-                                sceneData,
-                                parsedTexturesByPath,
-                                ref totalTextureBytes,
-                                ref skippedByCap,
-                                ref decodeFailures,
-                                ref missingPathMappings,
-                                ref missingAssetEntries,
-                                ref resolvedViaParsedTextures);
-                        }
-                    }
-
-                    var materialData = new ExtractionSceneData.MaterialData
-                    {
-                        Name = matName,
-                        TextureIndex = albedoTextureIndex,
-                        AlbedoTextureIndex = albedoTextureIndex,
-                        NormalTextureIndex = normalTextureIndex,
-                        BaseColor = baseColor,
-                        Metallic = metallic,
-                        Roughness = roughness
-                    };
-
-                    materialIndexByPath[path] = sceneData.Materials.Count;
-                    sceneData.Materials.Add(materialData);
-                }
-                catch (Exception ex)
-                {
-                    Log("warn", $"Material parse failed for {path}: {ex.Message}");
-                }
-            }
-
-            if (skippedByCap > 0)
-            {
-                Log("warn", $"Skipped {skippedByCap} textures due to safety caps");
-            }
-            if (decodeFailures > 0)
-            {
-                Log("warn", $"Failed to decode {decodeFailures} textures (unsupported format)");
-            }
-            if (resolvedViaParsedTextures > 0)
-            {
-                Log("info", $"Resolved {resolvedViaParsedTextures} YAML texture refs via parsed Texture2D decode");
-            }
-            if (missingGuidRefs > 0 || missingPathMappings > 0 || missingAssetEntries > 0)
-            {
-                Log(
-                    "info",
-                    $"YAML texture refs unresolved: missingGuid={missingGuidRefs}, missingPath={missingPathMappings}, missingAsset={missingAssetEntries}");
-            }
-
-            return materialIndexByPath;
-        }
-
-        private int ResolveYamlTextureIndex(
-            string yaml,
-            Dictionary<string, string> pathnameByGuid,
-            Dictionary<string, byte[]> assetFiles,
-            Dictionary<string, int> textureIndexByPath,
-            ExtractionSceneData sceneData,
-            Dictionary<string, Texture2D> parsedTexturesByPath,
-            ref int totalTextureBytes,
-            ref int skippedByCap,
-            ref int decodeFailures,
-            ref int missingGuidRefs,
-            ref int missingPathMappings,
-            ref int missingAssetEntries,
-            ref int resolvedViaParsedTextures,
-            params string[] keys)
-        {
-            if (keys == null || keys.Length == 0)
-                return -1;
-
-            foreach (var key in keys)
-            {
-                var guid = ParseTextureGuid(yaml, key);
-                if (string.IsNullOrWhiteSpace(guid))
-                {
-                    missingGuidRefs++;
-                    continue;
-                }
-                var resolvedIndex = ResolveYamlTextureIndexByGuid(
-                    guid,
-                    pathnameByGuid,
-                    assetFiles,
-                    textureIndexByPath,
-                    sceneData,
-                    parsedTexturesByPath,
-                    ref totalTextureBytes,
-                    ref skippedByCap,
-                    ref decodeFailures,
-                    ref missingPathMappings,
-                    ref missingAssetEntries,
-                    ref resolvedViaParsedTextures);
-                if (resolvedIndex >= 0)
-                    return resolvedIndex;
-            }
-
-            return -1;
-        }
-
-        private int ResolveYamlTextureIndexByGuid(
-            string guid,
-            Dictionary<string, string> pathnameByGuid,
-            Dictionary<string, byte[]> assetFiles,
-            Dictionary<string, int> textureIndexByPath,
-            ExtractionSceneData sceneData,
-            Dictionary<string, Texture2D> parsedTexturesByPath,
-            ref int totalTextureBytes,
-            ref int skippedByCap,
-            ref int decodeFailures,
-            ref int missingPathMappings,
-            ref int missingAssetEntries,
-            ref int resolvedViaParsedTextures)
-        {
-            if (string.IsNullOrWhiteSpace(guid))
-                return -1;
-
-            if (!pathnameByGuid.TryGetValue(guid, out var texturePath))
-            {
-                missingPathMappings++;
-                return -1;
-            }
-
-            if (textureIndexByPath.TryGetValue(texturePath, out var existingIndex))
-                return existingIndex;
-
-            var normalizedTexturePath = NormalizeAssetPathKey(texturePath);
-            if (parsedTexturesByPath != null && parsedTexturesByPath.TryGetValue(normalizedTexturePath, out var parsedTexture))
-            {
-                if (TryCreateTextureData(parsedTexture, out var parsedTextureData, out var parsedEncodedSize))
-                {
-                    if (sceneData.Textures.Count >= maxTextureCount ||
-                        parsedEncodedSize > maxTextureBytesPerTexture ||
-                        totalTextureBytes + parsedEncodedSize > maxTextureBytesTotal)
-                    {
-                        skippedByCap++;
-                        return -1;
-                    }
-
-                    var parsedIndex = sceneData.Textures.Count;
-                    sceneData.Textures.Add(parsedTextureData);
-                    textureIndexByPath[texturePath] = parsedIndex;
-                    totalTextureBytes += parsedEncodedSize;
-                    resolvedViaParsedTextures++;
-                    return parsedIndex;
-                }
-            }
-
-            if (!assetFiles.TryGetValue(texturePath, out var textureBytes))
-            {
-                missingAssetEntries++;
-                return -1;
-            }
-
-            if (sceneData.Textures.Count >= maxTextureCount ||
-                textureBytes.Length > maxTextureBytesPerTexture ||
-                totalTextureBytes + textureBytes.Length > maxTextureBytesTotal)
-            {
-                skippedByCap++;
-                return -1;
-            }
-
-            var mime = DetectImageMimeType(textureBytes);
-            if (mime == null)
-            {
-                decodeFailures++;
-                return -1;
-            }
-
-            var (width, height) = TryReadImageSize(textureBytes, mime);
-            var dataUrl = $"data:{mime};base64,{Convert.ToBase64String(textureBytes)}";
-            var index = sceneData.Textures.Count;
-            sceneData.Textures.Add(new ExtractionSceneData.TextureData
-            {
-                Name = Path.GetFileNameWithoutExtension(texturePath),
-                Width = width,
-                Height = height,
-                Format = mime,
-                DataUrl = dataUrl
-            });
-            textureIndexByPath[texturePath] = index;
-            totalTextureBytes += textureBytes.Length;
-            return index;
-        }
-
-        private Dictionary<string, Texture2D> BuildParsedTextureLookup(AssetsManager manager)
-        {
-            var map = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
-            if (manager?.assetsFileList == null)
-                return map;
-
-            var textures = manager.assetsFileList
-                .SelectMany(f => f.Objects.OfType<Texture2D>() ?? new List<Texture2D>())
-                .ToList();
-
-            foreach (var texture in textures)
-            {
-                if (texture?.assetsFile?.fileName == null)
-                    continue;
-
-                var normalizedPath = NormalizeAssetPathKey(texture.assetsFile.fileName);
-                if (!map.ContainsKey(normalizedPath))
-                {
-                    map[normalizedPath] = texture;
-                }
-            }
-
-            return map;
-        }
-
-        private static string NormalizeAssetPathKey(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-                return string.Empty;
-
-            return path.Replace('\\', '/').Trim().ToLowerInvariant();
-        }
-
-        private static Dictionary<string, string> ParseYamlTexEnvGuidMap(string yaml)
-        {
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (string.IsNullOrWhiteSpace(yaml))
-                return map;
-
-            var matches = Regex.Matches(
-                yaml,
-                @"^\s*-\s*([^:]+):\s*\{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{32})",
-                RegexOptions.Multiline);
-
-            foreach (Match match in matches)
-            {
-                var key = match.Groups[1].Value.Trim();
-                var guid = match.Groups[2].Value.Trim();
-                if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(guid) && !map.ContainsKey(key))
-                {
-                    map[key] = guid;
-                }
-            }
-
-            return map;
-        }
-
-        private static string? SelectYamlTexEnvGuid(Dictionary<string, string> texEnvGuidByName, bool preferNormal)
-        {
-            if (texEnvGuidByName == null || texEnvGuidByName.Count == 0)
-                return null;
-
-            if (preferNormal)
-            {
-                var normalEntry = texEnvGuidByName.FirstOrDefault(pair =>
-                    pair.Key.Contains("normal", StringComparison.OrdinalIgnoreCase) ||
-                    pair.Key.Contains("bump", StringComparison.OrdinalIgnoreCase) ||
-                    pair.Key.Contains("nrm", StringComparison.OrdinalIgnoreCase));
-                return string.IsNullOrWhiteSpace(normalEntry.Key) ? null : normalEntry.Value;
-            }
-
-            var albedoEntry = texEnvGuidByName.FirstOrDefault(pair =>
-                pair.Key.Contains("base", StringComparison.OrdinalIgnoreCase) ||
-                pair.Key.Contains("main", StringComparison.OrdinalIgnoreCase) ||
-                pair.Key.Contains("diff", StringComparison.OrdinalIgnoreCase) ||
-                pair.Key.Contains("albedo", StringComparison.OrdinalIgnoreCase));
-            if (!string.IsNullOrWhiteSpace(albedoEntry.Key))
-                return albedoEntry.Value;
-
-            var firstNonNormal = texEnvGuidByName.FirstOrDefault(pair =>
-                !pair.Key.Contains("normal", StringComparison.OrdinalIgnoreCase) &&
-                !pair.Key.Contains("bump", StringComparison.OrdinalIgnoreCase) &&
-                !pair.Key.Contains("nrm", StringComparison.OrdinalIgnoreCase));
-
-            return string.IsNullOrWhiteSpace(firstNonNormal.Key) ? texEnvGuidByName.First().Value : firstNonNormal.Value;
-        }
-
-        private Dictionary<string, ExtractionSceneData.MeshData> ExtractYamlMeshes(Dictionary<string, byte[]> assetFiles)
-        {
-            var meshes = new Dictionary<string, ExtractionSceneData.MeshData>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var asset in assetFiles)
-            {
-                var path = asset.Key;
-                if (!path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (asset.Value.Length < 8 ||
-                    !(asset.Value[0] == (byte)'%' && asset.Value[1] == (byte)'Y'))
-                    continue;
-
-                var text = Encoding.UTF8.GetString(asset.Value);
-                if (!text.Contains("\nMesh:", StringComparison.Ordinal))
-                    continue;
-
-                try
-                {
-                    var mesh = ParseYamlMesh(path, text);
-                    if (mesh != null && mesh.Vertices.Length >= 9 && mesh.Indices.Length >= 3)
-                    {
-                        meshes[path] = mesh;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("warn", $"YAML mesh parse failed for {path}: {ex.Message}");
-                }
-            }
-
-            return meshes;
-        }
-
-        private List<ExtractionSceneData.MeshData> ExtractPlacedYamlMeshes(
-            Dictionary<string, byte[]> assetFiles,
-            Dictionary<string, string> pathnameByGuid,
-            Dictionary<string, ExtractionSceneData.MeshData> yamlMeshesByPath,
-            Dictionary<string, int> materialIndexByPath)
-        {
-            var prefabEntry = assetFiles
-                .FirstOrDefault(kvp => kvp.Key.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
-            if (prefabEntry.Value == null || prefabEntry.Value.Length == 0)
-                return new List<ExtractionSceneData.MeshData>();
-
-            var prefabYaml = Encoding.UTF8.GetString(prefabEntry.Value);
-            var sections = Regex.Matches(prefabYaml, @"^--- !u!(\d+) &(\d+)\r?\n([\s\S]*?)(?=^--- !u!|\z)", RegexOptions.Multiline);
-
-            var gameObjectNameById = new Dictionary<long, string>();
-            var gameObjectActiveById = new Dictionary<long, bool>();
-            var rendererEnabledByGameObject = new Dictionary<long, bool>();
-            var transformById = new Dictionary<long, TransformState>();
-            var transformIdByGameObject = new Dictionary<long, long>();
-            var meshGuidByGameObject = new Dictionary<long, string>();
-            var materialGuidByGameObject = new Dictionary<long, string>();
-
-            foreach (Match section in sections)
-            {
-                if (!int.TryParse(section.Groups[1].Value, out var classId))
-                    continue;
-                if (!long.TryParse(section.Groups[2].Value, out var objectId))
-                    continue;
-
-                var body = section.Groups[3].Value;
-
-                if (classId == 1)
-                {
-                    var goName = MatchValue(body, @"^\s*m_Name:\s*(.+)$");
-                    if (!string.IsNullOrWhiteSpace(goName))
-                    {
-                        gameObjectNameById[objectId] = goName;
-                    }
-
-                    var isActive = ParseBoolInt(body, "m_IsActive", true);
-                    gameObjectActiveById[objectId] = isActive;
-                }
-                else if (classId == 4)
-                {
-                    var gameObjectId = ParseFileId(body, "m_GameObject");
-                    if (gameObjectId == 0)
-                        continue;
-
-                    var parentTransformId = ParseFileId(body, "m_Father");
-                    var localPosition = ParseVector3(body, "m_LocalPosition");
-                    var localRotation = ParseQuaternion(body, "m_LocalRotation");
-                    var localScale = ParseVector3(body, "m_LocalScale", new[] { 1f, 1f, 1f });
-
-                    transformById[objectId] = new TransformState
-                    {
-                        TransformId = objectId,
-                        GameObjectId = gameObjectId,
-                        ParentTransformId = parentTransformId,
-                        LocalPosition = localPosition,
-                        LocalRotation = localRotation,
-                        LocalScale = localScale
-                    };
-
-                    transformIdByGameObject[gameObjectId] = objectId;
-                }
-                else if (classId == 33)
-                {
-                    var gameObjectId = ParseFileId(body, "m_GameObject");
-                    var meshGuid = ParseGuid(body, "m_Mesh");
-                    if (gameObjectId != 0 && !string.IsNullOrWhiteSpace(meshGuid))
-                    {
-                        meshGuidByGameObject[gameObjectId] = meshGuid;
-                    }
-                }
-                else if (classId == 23)
-                {
-                    var gameObjectId = ParseFileId(body, "m_GameObject");
-                    if (gameObjectId == 0)
-                        continue;
-
-                    rendererEnabledByGameObject[gameObjectId] = ParseBoolInt(body, "m_Enabled", true);
-
-                    var materialGuid = ParseFirstMaterialGuid(body);
-                    if (!string.IsNullOrWhiteSpace(materialGuid))
-                    {
-                        materialGuidByGameObject[gameObjectId] = materialGuid;
-                    }
-                }
-                else if (classId == 137)
-                {
-                    var gameObjectId = ParseFileId(body, "m_GameObject");
-                    if (gameObjectId == 0)
-                        continue;
-
-                    rendererEnabledByGameObject[gameObjectId] = ParseBoolInt(body, "m_Enabled", true);
-
-                    var materialGuid = ParseFirstMaterialGuid(body);
-                    if (!string.IsNullOrWhiteSpace(materialGuid))
-                    {
-                        materialGuidByGameObject[gameObjectId] = materialGuid;
-                    }
-                }
-            }
-
-            var worldCache = new Dictionary<long, TransformWorld>();
-            var activeHierarchyCache = new Dictionary<long, bool>();
-            var result = new List<ExtractionSceneData.MeshData>();
-
-            foreach (var meshBinding in meshGuidByGameObject)
-            {
-                var gameObjectId = meshBinding.Key;
-                var meshGuid = meshBinding.Value;
-                if (!IsGameObjectVisible(
-                        gameObjectId,
-                        gameObjectActiveById,
-                        rendererEnabledByGameObject,
-                        transformIdByGameObject,
-                        transformById,
-                        activeHierarchyCache))
-                {
-                    continue;
-                }
-
-                if (!pathnameByGuid.TryGetValue(meshGuid, out var meshPath))
-                    continue;
-                if (!yamlMeshesByPath.TryGetValue(meshPath, out var meshTemplate))
-                    continue;
-                if (!transformIdByGameObject.TryGetValue(gameObjectId, out var transformId))
-                    continue;
-
-                var world = ComputeWorldTransform(transformId, transformById, worldCache);
-                if (world == null)
-                    continue;
-
-                result.Add(new ExtractionSceneData.MeshData
-                {
-                    Name = gameObjectNameById.TryGetValue(gameObjectId, out var goName) ? goName : meshTemplate.Name,
-                    Vertices = meshTemplate.Vertices,
-                    Indices = meshTemplate.Indices,
-                    Normals = meshTemplate.Normals,
-                    UV = meshTemplate.UV,
-                    MaterialIndex = ResolveMaterialIndex(gameObjectId, materialGuidByGameObject, pathnameByGuid, materialIndexByPath),
-                    Position = world.Position,
-                    Rotation = world.Rotation,
-                    Scale = world.Scale
-                });
-            }
-
-            return result;
-        }
-
-        private static bool IsGameObjectVisible(
-            long gameObjectId,
-            Dictionary<long, bool> gameObjectActiveById,
-            Dictionary<long, bool> rendererEnabledByGameObject,
-            Dictionary<long, long> transformIdByGameObject,
-            Dictionary<long, TransformState> transformById,
-            Dictionary<long, bool> cache)
-        {
-            if (!rendererEnabledByGameObject.TryGetValue(gameObjectId, out var rendererEnabled))
-                rendererEnabled = true;
-
-            if (!rendererEnabled)
-                return false;
-
-            return IsGameObjectActiveInHierarchy(gameObjectId, gameObjectActiveById, transformIdByGameObject, transformById, cache);
-        }
-
-        private static bool IsGameObjectActiveInHierarchy(
-            long gameObjectId,
-            Dictionary<long, bool> gameObjectActiveById,
-            Dictionary<long, long> transformIdByGameObject,
-            Dictionary<long, TransformState> transformById,
-            Dictionary<long, bool> cache)
-        {
-            if (cache.TryGetValue(gameObjectId, out var cached))
-                return cached;
-
-            if (!gameObjectActiveById.TryGetValue(gameObjectId, out var selfActive))
-                selfActive = true;
-
-            if (!selfActive)
-            {
-                cache[gameObjectId] = false;
-                return false;
-            }
-
-            if (!transformIdByGameObject.TryGetValue(gameObjectId, out var transformId) ||
-                !transformById.TryGetValue(transformId, out var transformState) ||
-                transformState.ParentTransformId == 0)
-            {
-                cache[gameObjectId] = true;
-                return true;
-            }
-
-            if (!transformById.TryGetValue(transformState.ParentTransformId, out var parentTransformState))
-            {
-                cache[gameObjectId] = true;
-                return true;
-            }
-
-            var active = IsGameObjectActiveInHierarchy(
-                parentTransformState.GameObjectId,
-                gameObjectActiveById,
-                transformIdByGameObject,
-                transformById,
-                cache);
-
-            cache[gameObjectId] = active;
-            return active;
-        }
-
-        private static int ResolveMaterialIndex(
-            long gameObjectId,
-            Dictionary<long, string> materialGuidByGameObject,
-            Dictionary<string, string> pathnameByGuid,
-            Dictionary<string, int> materialIndexByPath)
-        {
-            if (!materialGuidByGameObject.TryGetValue(gameObjectId, out var materialGuid))
-                return 0;
-            if (!pathnameByGuid.TryGetValue(materialGuid, out var materialPath))
-                return 0;
-            return materialIndexByPath.TryGetValue(materialPath, out var materialIndex) ? materialIndex : 0;
-        }
-
-        private static TransformWorld? ComputeWorldTransform(
-            long transformId,
-            Dictionary<long, TransformState> transformById,
-            Dictionary<long, TransformWorld> cache)
-        {
-            if (cache.TryGetValue(transformId, out var cached))
-                return cached;
-            if (!transformById.TryGetValue(transformId, out var state))
-                return null;
-
-            TransformWorld world;
-            if (state.ParentTransformId != 0 && transformById.ContainsKey(state.ParentTransformId))
-            {
-                var parentWorld = ComputeWorldTransform(state.ParentTransformId, transformById, cache);
-                if (parentWorld == null)
-                    return null;
-
-                var scaledLocal = MultiplyVectorComponents(state.LocalPosition, parentWorld.Scale);
-                var rotatedLocal = RotateVectorByQuaternion(scaledLocal, parentWorld.Rotation);
-                world = new TransformWorld
-                {
-                    Position = new[]
-                    {
-                        parentWorld.Position[0] + rotatedLocal[0],
-                        parentWorld.Position[1] + rotatedLocal[1],
-                        parentWorld.Position[2] + rotatedLocal[2]
-                    },
-                    Rotation = MultiplyQuaternions(parentWorld.Rotation, state.LocalRotation),
-                    Scale = new[]
-                    {
-                        parentWorld.Scale[0] * state.LocalScale[0],
-                        parentWorld.Scale[1] * state.LocalScale[1],
-                        parentWorld.Scale[2] * state.LocalScale[2]
-                    }
-                };
-            }
-            else
-            {
-                world = new TransformWorld
-                {
-                    Position = state.LocalPosition,
-                    Rotation = state.LocalRotation,
-                    Scale = state.LocalScale
-                };
-            }
-
-            cache[transformId] = world;
-            return world;
         }
 
         private static float[] RotateVectorByQuaternion(float[] vector, float[] quaternion)
@@ -1346,6 +635,16 @@ namespace AssetStudio.Extraction.Core.Services
             };
         }
 
+        private static float[] DivideVectorComponents(float[] vector, float[] divisor)
+        {
+            return new[]
+            {
+                SafeDivide(vector[0], divisor[0]),
+                SafeDivide(vector[1], divisor[1]),
+                SafeDivide(vector[2], divisor[2])
+            };
+        }
+
         private static float[] MultiplyQuaternions(float[] a, float[] b)
         {
             return new[]
@@ -1357,249 +656,34 @@ namespace AssetStudio.Extraction.Core.Services
             };
         }
 
-        private static long ParseFileId(string body, string fieldName)
+        private static float[] InvertQuaternion(float[] quaternion)
         {
-            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{fileID:\s*(-?\d+)", RegexOptions.Multiline);
-            return match.Success && long.TryParse(match.Groups[1].Value, out var fileId) ? fileId : 0;
-        }
+            var magnitudeSq = quaternion[0] * quaternion[0]
+                + quaternion[1] * quaternion[1]
+                + quaternion[2] * quaternion[2]
+                + quaternion[3] * quaternion[3];
 
-        private static bool ParseBoolInt(string body, string fieldName, bool fallback)
-        {
-            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*(\d+)\s*$", RegexOptions.Multiline);
-            if (!match.Success || !int.TryParse(match.Groups[1].Value, out var value))
-                return fallback;
-
-            return value != 0;
-        }
-
-        private static string? ParseGuid(string body, string fieldName)
-        {
-            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{{32}})", RegexOptions.Multiline);
-            return match.Success ? match.Groups[1].Value : null;
-        }
-
-        private static string? ParseFirstMaterialGuid(string body)
-        {
-            var match = Regex.Match(
-                body,
-                @"^\s*-\s*\{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{32})",
-                RegexOptions.Multiline);
-            return match.Success ? match.Groups[1].Value : null;
-        }
-
-        private static string? ParseTextureGuid(string yaml, string key)
-        {
-            var match = Regex.Match(
-                yaml,
-                $@"^\s*-\s*{Regex.Escape(key)}:\s*\{{fileID:\s*-?\d+,\s*guid:\s*([0-9a-fA-F]{{32}})",
-                RegexOptions.Multiline);
-            return match.Success ? match.Groups[1].Value : null;
-        }
-
-        private static float[]? ParseColor(string yaml, string key)
-        {
-            var match = Regex.Match(
-                yaml,
-                $@"^\s*-\s*{Regex.Escape(key)}:\s*\{{r:\s*([^,]+),\s*g:\s*([^,]+),\s*b:\s*([^,]+),\s*a:\s*([^\}}]+)\}}",
-                RegexOptions.Multiline);
-            if (!match.Success)
-                return null;
-
-            return new[]
-            {
-                ParseFloat(match.Groups[1].Value, 1f),
-                ParseFloat(match.Groups[2].Value, 1f),
-                ParseFloat(match.Groups[3].Value, 1f),
-                ParseFloat(match.Groups[4].Value, 1f)
-            };
-        }
-
-        private static float ParseFloatProperty(string yaml, string key, float fallback)
-        {
-            var match = Regex.Match(
-                yaml,
-                $@"^\s*-\s*{Regex.Escape(key)}:\s*([^\r\n]+)$",
-                RegexOptions.Multiline);
-            return match.Success ? ParseFloat(match.Groups[1].Value, fallback) : fallback;
-        }
-
-        private static string? DetectImageMimeType(byte[] data)
-        {
-            if (data.Length >= 8 &&
-                data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
-                data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
-                return "image/png";
-
-            if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
-                return "image/jpeg";
-
-            return null;
-        }
-
-        private static (int width, int height) TryReadImageSize(byte[] data, string mime)
-        {
-            if (mime == "image/png" && data.Length >= 24)
-            {
-                var width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
-                var height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
-                return (Math.Max(0, width), Math.Max(0, height));
-            }
-
-            if (mime == "image/jpeg")
-            {
-                int i = 2;
-                while (i + 9 < data.Length)
-                {
-                    if (data[i] != 0xFF)
-                    {
-                        i++;
-                        continue;
-                    }
-
-                    var marker = data[i + 1];
-                    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2)
-                    {
-                        var height = (data[i + 5] << 8) + data[i + 6];
-                        var width = (data[i + 7] << 8) + data[i + 8];
-                        return (Math.Max(0, width), Math.Max(0, height));
-                    }
-
-                    if (i + 3 >= data.Length)
-                        break;
-                    var segmentLen = (data[i + 2] << 8) + data[i + 3];
-                    if (segmentLen <= 0)
-                        break;
-                    i += 2 + segmentLen;
-                }
-            }
-
-            return (0, 0);
-        }
-
-        private static float[] ParseVector3(string body, string fieldName, float[]? fallback = null)
-        {
-            fallback ??= new[] { 0f, 0f, 0f };
-            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^\}}]+)\}}", RegexOptions.Multiline);
-            if (!match.Success)
-                return fallback;
-
-            return new[]
-            {
-                ParseFloat(match.Groups[1].Value, fallback[0]),
-                ParseFloat(match.Groups[2].Value, fallback[1]),
-                ParseFloat(match.Groups[3].Value, fallback[2])
-            };
-        }
-
-        private static float[] ParseQuaternion(string body, string fieldName)
-        {
-            var match = Regex.Match(body, $@"^\s*{Regex.Escape(fieldName)}:\s*\{{x:\s*([^,]+),\s*y:\s*([^,]+),\s*z:\s*([^,]+),\s*w:\s*([^\}}]+)\}}", RegexOptions.Multiline);
-            if (!match.Success)
+            if (magnitudeSq < 1e-8f)
                 return new[] { 0f, 0f, 0f, 1f };
 
+            var inverseMagnitude = 1f / magnitudeSq;
             return new[]
             {
-                ParseFloat(match.Groups[1].Value, 0f),
-                ParseFloat(match.Groups[2].Value, 0f),
-                ParseFloat(match.Groups[3].Value, 0f),
-                ParseFloat(match.Groups[4].Value, 1f)
+                -quaternion[0] * inverseMagnitude,
+                -quaternion[1] * inverseMagnitude,
+                -quaternion[2] * inverseMagnitude,
+                quaternion[3] * inverseMagnitude
             };
         }
 
-        private static float ParseFloat(string value, float fallback)
+        private static float SafeDivide(float value, float divisor)
         {
-            return float.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var result)
-                ? result
-                : fallback;
+            return Math.Abs(divisor) < 1e-6f ? value : value / divisor;
         }
 
-        private ExtractionSceneData.MeshData? ParseYamlMesh(string path, string yaml)
+        private static string FormatVector(float[] value)
         {
-            var name = MatchValue(yaml, @"^\s*m_Name:\s*(.+)$") ?? Path.GetFileNameWithoutExtension(path);
-            var vertexCountText = MatchValue(yaml, @"^\s*m_VertexCount:\s*(\d+)$");
-            var dataHex = MatchValue(yaml, @"^\s*_typelessdata:\s*([0-9a-fA-F]+)$");
-            var indexHex = MatchValue(yaml, @"^\s*m_IndexBuffer:\s*([0-9a-fA-F]+)$");
-            var indexFormatText = MatchValue(yaml, @"^\s*m_IndexFormat:\s*(\d+)$");
-
-            if (!int.TryParse(vertexCountText, out var vertexCount) || vertexCount <= 0)
-                return null;
-            if (string.IsNullOrWhiteSpace(dataHex) || string.IsNullOrWhiteSpace(indexHex))
-                return null;
-
-            var vertexBytes = HexToBytes(dataHex);
-            var indexBytes = HexToBytes(indexHex);
-            if (vertexBytes.Length == 0 || indexBytes.Length == 0)
-                return null;
-
-            var stride = vertexBytes.Length / vertexCount;
-            if (stride < 12)
-                return null;
-
-            var vertices = new float[vertexCount * 3];
-            for (var i = 0; i < vertexCount; i++)
-            {
-                var offset = i * stride;
-                if (offset + 12 > vertexBytes.Length)
-                    break;
-
-                vertices[i * 3] = BitConverter.ToSingle(vertexBytes, offset);
-                vertices[i * 3 + 1] = BitConverter.ToSingle(vertexBytes, offset + 4);
-                vertices[i * 3 + 2] = BitConverter.ToSingle(vertexBytes, offset + 8);
-            }
-
-            var indexFormat = int.TryParse(indexFormatText, out var parsedFormat) ? parsedFormat : 0;
-            uint[] indices;
-            if (indexFormat == 0)
-            {
-                var count = indexBytes.Length / 2;
-                indices = new uint[count];
-                for (var i = 0; i < count; i++)
-                {
-                    indices[i] = BitConverter.ToUInt16(indexBytes, i * 2);
-                }
-            }
-            else
-            {
-                var count = indexBytes.Length / 4;
-                indices = new uint[count];
-                for (var i = 0; i < count; i++)
-                {
-                    indices[i] = BitConverter.ToUInt32(indexBytes, i * 4);
-                }
-            }
-
-            return new ExtractionSceneData.MeshData
-            {
-                Name = name,
-                Vertices = vertices,
-                Indices = indices,
-                Normals = Array.Empty<float>(),
-                UV = Array.Empty<float>(),
-                MaterialIndex = 0
-            };
-        }
-
-        private static string? MatchValue(string text, string pattern)
-        {
-            var match = Regex.Match(text, pattern, RegexOptions.Multiline);
-            return match.Success ? match.Groups[1].Value.Trim() : null;
-        }
-
-        private static byte[] HexToBytes(string hex)
-        {
-            if (string.IsNullOrWhiteSpace(hex))
-                return Array.Empty<byte>();
-
-            var cleaned = hex.Trim();
-            if (cleaned.Length % 2 != 0)
-                return Array.Empty<byte>();
-
-            var bytes = new byte[cleaned.Length / 2];
-            for (var i = 0; i < bytes.Length; i++)
-            {
-                bytes[i] = Convert.ToByte(cleaned.Substring(i * 2, 2), 16);
-            }
-            return bytes;
+            return string.Join(", ", value.Select(component => component.ToString("0.###", CultureInfo.InvariantCulture)));
         }
 
         private void ExtractMeshesAndTextures(AssetsManager manager, ExtractionSceneData sceneData)
@@ -1723,8 +807,8 @@ namespace AssetStudio.Extraction.Core.Services
                         .ToArray() ?? Array.Empty<string>();
 
                     var baseColor = GetMaterialColor(material, "_BaseColor", "_Color") ?? new[] { 1f, 1f, 1f, 1f };
-                    var metallic = GetMaterialFloat(material, 0f, "_Metallic", "_Metalness");
-                    var smoothness = GetMaterialFloat(material, 0.5f, "_Glossiness", "_Smoothness");
+                    var metallic = GetMaterialFloat(material, "_Metallic", "_Metalness");
+                    var smoothness = GetMaterialFloat(material, "_Glossiness", "_Smoothness");
                     var roughness = Math.Clamp(1f - smoothness, 0f, 1f);
 
                     var albedoTextureIndex = ResolveMaterialTextureIndex(
@@ -1735,7 +819,6 @@ namespace AssetStudio.Extraction.Core.Services
                         ref skippedByCap,
                         ref decodeFailures,
                         out var resolvedAlbedoKey,
-                        allowAnyFallback: true,
                         "_BaseMap",
                         "_BaseColorMap",
                         "_BaseColorTexture",
@@ -1755,7 +838,6 @@ namespace AssetStudio.Extraction.Core.Services
                         ref skippedByCap,
                         ref decodeFailures,
                         out var resolvedNormalKey,
-                        allowAnyFallback: false,
                         "_BumpMap",
                         "_NormalMap",
                         "_DetailNormalMap",
@@ -1932,6 +1014,95 @@ namespace AssetStudio.Extraction.Core.Services
             };
         }
 
+        private void NormalizeStaticMeshTransformsForTag(AssetsManager manager, ExtractionSceneData sceneData, string? bodyPartTag)
+        {
+            if (sceneData.Meshes.Count == 0)
+                return;
+
+            var normalizedTag = NormalizeBodyPartTag(bodyPartTag);
+            if (string.IsNullOrWhiteSpace(normalizedTag) || normalizedTag.Equals("world", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (!TryFindAnchorTransformByTag(manager, normalizedTag, out var anchorTransform))
+            {
+                Log("warn", $"Static mesh normalization skipped: missing explicit '{normalizedTag}' anchor transform in asset hierarchy");
+                return;
+            }
+
+            var inverseAnchorRotation = InvertQuaternion(anchorTransform.Rotation);
+            for (var i = 0; i < sceneData.Meshes.Count; i++)
+            {
+                var mesh = sceneData.Meshes[i];
+                var worldPosition = NormalizeVector3(mesh.Position);
+                var worldRotation = NormalizeQuaternion(mesh.Rotation);
+                var worldScale = NormalizeScale(mesh.Scale);
+
+                var positionDelta = new[]
+                {
+                    worldPosition[0] - anchorTransform.Position[0],
+                    worldPosition[1] - anchorTransform.Position[1],
+                    worldPosition[2] - anchorTransform.Position[2]
+                };
+
+                var localPosition = RotateVectorByQuaternion(DivideVectorComponents(positionDelta, anchorTransform.Scale), inverseAnchorRotation);
+                var localRotation = MultiplyQuaternions(inverseAnchorRotation, worldRotation);
+                var localScale = DivideVectorComponents(worldScale, anchorTransform.Scale);
+
+                mesh.Position = localPosition;
+                mesh.Rotation = localRotation;
+                mesh.Scale = localScale;
+            }
+
+            Log(
+                "info",
+                $"Normalized {sceneData.Meshes.Count} static meshes to explicit '{normalizedTag}' anchor local space at [{FormatVector(anchorTransform.Position)}]");
+        }
+
+        private bool TryFindAnchorTransformByTag(AssetsManager manager, string tag, out MeshTransformData anchorTransform)
+        {
+            anchorTransform = null!;
+
+            if (!ExplicitAnchorNames.TryGetValue(tag, out var explicitNames) || explicitNames.Length == 0)
+                return false;
+
+            var gameObjects = manager.assetsFileList
+                .SelectMany(f => f.Objects.OfType<GameObject>() ?? new List<GameObject>())
+                .Where(go => go?.m_Transform != null)
+                .ToList();
+
+            if (gameObjects.Count == 0)
+                return false;
+
+            var transformCache = new Dictionary<string, MeshTransformData>(StringComparer.Ordinal);
+            foreach (var gameObject in gameObjects)
+            {
+                var name = gameObject.Name ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                if (!explicitNames.Any(candidate => name.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                var world = ComputeTransformWorld(gameObject.m_Transform, transformCache, new HashSet<string>(StringComparer.Ordinal));
+                if (world == null)
+                    continue;
+
+                anchorTransform = world;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static string? NormalizeBodyPartTag(string? tag)
+        {
+            if (string.IsNullOrWhiteSpace(tag))
+                return null;
+
+            var normalized = tag.Trim().ToLowerInvariant();
+            return AnchorTags.Contains(normalized) ? normalized : null;
+        }
+
         private static bool TryGetRenderer(GameObject gameObject, out Renderer renderer)
         {
             if (gameObject?.m_SkinnedMeshRenderer != null)
@@ -1990,12 +1161,11 @@ namespace AssetStudio.Extraction.Core.Services
             ref int skippedByCap,
             ref int decodeFailures,
             out string? matchedTextureKey,
-            bool allowAnyFallback,
             params string[] textureKeys)
         {
             matchedTextureKey = null;
             var materialName = material?.Name ?? "Material";
-            foreach (var candidate in EnumerateMaterialTextures(material, allowAnyFallback, textureKeys))
+            foreach (var candidate in EnumerateMaterialTextures(material, textureKeys))
             {
                 var texture = candidate.Texture;
                 var textureKey = GetObjectKey(texture);
@@ -2042,7 +1212,6 @@ namespace AssetStudio.Extraction.Core.Services
 
         private static List<(string Key, Texture2D Texture)> EnumerateMaterialTextures(
             Material material,
-            bool allowAnyFallback,
             params string[] keys)
         {
             var results = new List<(string Key, Texture2D Texture)>();
@@ -2068,42 +1237,7 @@ namespace AssetStudio.Extraction.Core.Services
                 results.Add((texEnv.Key, resolvedTexture));
             }
 
-            if (!allowAnyFallback)
-                return results;
-
-            foreach (var texEnv in material.m_SavedProperties.m_TexEnvs)
-            {
-                if (string.IsNullOrWhiteSpace(texEnv.Key) || IsNonAlbedoTextureKey(texEnv.Key))
-                    continue;
-
-                if (texEnv.Value?.m_Texture == null || !texEnv.Value.m_Texture.TryGet<Texture2D>(out var resolvedTexture))
-                    continue;
-
-                var objectKey = GetObjectKey(resolvedTexture);
-                if (!seenTextureKeys.Add(objectKey))
-                    continue;
-
-                results.Add((texEnv.Key, resolvedTexture));
-            }
-
             return results;
-        }
-
-        private static bool IsNonAlbedoTextureKey(string key)
-        {
-            if (string.IsNullOrWhiteSpace(key))
-                return false;
-
-            return key.Contains("normal", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("bump", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("metal", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("rough", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("smooth", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("spec", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("occlusion", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("height", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("mask", StringComparison.OrdinalIgnoreCase) ||
-                   key.Contains("emission", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryCreateTextureData(Texture2D texture, out ExtractionSceneData.TextureData textureData, out int encodedSize)
@@ -2131,9 +1265,12 @@ namespace AssetStudio.Extraction.Core.Services
             return StableMaterialPropertyReader.GetColor(material, keys);
         }
 
-        private static float GetMaterialFloat(Material material, float fallback, params string[] keys)
+        private static float GetMaterialFloat(Material material, params string[] keys)
         {
-            return StableMaterialPropertyReader.GetFloat(material, fallback, keys);
+            if (StableMaterialPropertyReader.TryGetFloat(material, out var value, keys))
+                return value;
+
+            throw new InvalidDataException($"Missing required material float property. Keys: {string.Join(", ", keys ?? Array.Empty<string>())}");
         }
 
         private static string GetObjectKey(AssetStudio.Object obj)
@@ -2253,23 +1390,6 @@ namespace AssetStudio.Extraction.Core.Services
             {
                 return "unavailable";
             }
-        }
-
-        private sealed class TransformState
-        {
-            public long TransformId { get; init; }
-            public long GameObjectId { get; init; }
-            public long ParentTransformId { get; init; }
-            public required float[] LocalPosition { get; init; }
-            public required float[] LocalRotation { get; init; }
-            public required float[] LocalScale { get; init; }
-        }
-
-        private sealed class TransformWorld
-        {
-            public required float[] Position { get; init; }
-            public required float[] Rotation { get; init; }
-            public required float[] Scale { get; init; }
         }
 
         private sealed class MeshTransformData

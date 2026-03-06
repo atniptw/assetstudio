@@ -52,7 +52,7 @@
 					@foreach (var item in FilteredItems)
 					{
 						<label class="asset-row">
-							<input type="checkbox" checked="@item.Enabled" @onchange="(e) => OnToggleItemChanged(item, e.Value)" />
+							<input type="checkbox" @bind="item.Enabled" @bind:after="() => OnToggleItemChanged(item)" />
 							<span>@item.DisplayName</span>
 							<span class="asset-tag">@item.BodyPartTag</span>
 						</label>
@@ -133,6 +133,10 @@
 	private string SelectedTab = "All";
 	private string ImportBannerMessage = string.Empty;
 	private string ImportBannerLevel = "info";
+	private bool ModelFlipX = true;
+	private bool ModelFlipY = false;
+	private bool TextureFlipX = false;
+	private bool TextureFlipY = true;
 
 	private static readonly List<string> Tabs = new() { "All", "Head", "Neck", "Body", "Hip", "LeftArm", "RightArm", "LeftLeg", "RightLeg", "World" };
 
@@ -152,7 +156,8 @@
 
 		initialized = true;
 		Diagnostics.OnChanged += HandleDiagnosticsChanged;
-		await JS.InvokeVoidAsync("modViewer.init", "viewer-canvas");
+		await InitializeViewerAsync();
+		await ApplyTransformTogglesAsync();
 		
 		// Set JS runtime for asset rendering
 		Loader.SetJSRuntime(JS);
@@ -160,11 +165,42 @@
 		await LoadStoredFilesAsync();
 	}
 
+	private async Task InitializeViewerAsync()
+	{
+		const int maxAttempts = 8;
+		for (var attempt = 1; attempt <= maxAttempts; attempt++)
+		{
+			try
+			{
+				await JS.InvokeVoidAsync("modViewer.init", "viewer-canvas");
+				return;
+			}
+			catch (JSException ex) when (ex.Message.Contains("modViewer", StringComparison.OrdinalIgnoreCase) && attempt < maxAttempts)
+			{
+				await Task.Delay(250);
+			}
+		}
+
+		await JS.InvokeVoidAsync("modViewer.init", "viewer-canvas");
+	}
+
 	private async Task ReloadAsync()
 	{
 		Diagnostics.Clear();
 		await JS.InvokeVoidAsync("modViewer.clearModAssets");
+		await ApplyTransformTogglesAsync();
 		await Loader.LoadAsync();
+	}
+
+	private async Task ApplyTransformTogglesAsync()
+	{
+		await JS.InvokeVoidAsync("modViewer.setTransformToggles", new TransformToggleOptions
+		{
+			ModelFlipX = ModelFlipX,
+			ModelFlipY = ModelFlipY,
+			TextureFlipX = TextureFlipX,
+			TextureFlipY = TextureFlipY
+		});
 	}
 
 	private void OpenDiagnostics()
@@ -259,9 +295,9 @@
 		StateHasChanged();
 	}
 
-	private async Task OnToggleItemChanged(PersistedModFile item, object? value)
+	private async Task OnToggleItemChanged(PersistedModFile item)
 	{
-		item.Enabled = value is bool b && b;
+		Diagnostics.Add("info", $"Toggled mod: {item.DisplayName}, enabled={item.Enabled}");
 
 		if (!item.Enabled)
 		{
@@ -307,7 +343,7 @@
 			}
 
 			Diagnostics.Add("info", $"Using {companionFiles.Count} companion files for {item.DisplayName}");
-			var avatarData = await Extractor.ExtractStaticAssetAsync(bytes, item.FileName, companionFiles);
+			var avatarData = await Extractor.ExtractStaticAssetAsync(bytes, item.FileName, item.BodyPartTag, companionFiles);
 			Diagnostics.Add("info", $"Extracted {item.DisplayName}: meshes={avatarData.Meshes.Count}, materials={avatarData.Materials.Count}, textures={avatarData.Textures.Count}, anchors={avatarData.AttachmentAnchors.Count}");
 
 			if (avatarData.Meshes.Count == 0)
@@ -326,7 +362,7 @@
 			var json = JsonSerializer.Serialize(avatarData, options);
 			var addResult = await JS.InvokeAsync<ModRenderResult>("modViewer.addModAsset", item.Id, json, item.BodyPartTag?.ToLowerInvariant());
 			var renderState = await JS.InvokeAsync<ModRenderState>("modViewer.getRenderState");
-			Diagnostics.Add("info", $"Render add result for {item.DisplayName}: added={addResult?.Added}, reason={addResult?.Reason}, anchor={addResult?.AnchorTag}, anchorFound={addResult?.AnchorFound}, modGroups={addResult?.ModGroupCount}, sceneMeshes={renderState?.SceneMeshCount}, modMeshes={addResult?.MeshCount}, boundsCenter=[{FormatVector(addResult?.BoundsCenter)}], boundsSize=[{FormatVector(addResult?.BoundsSize)}]");
+			Diagnostics.Add("info", $"Render add result for {item.DisplayName}: added={addResult?.Added}, reason={addResult?.Reason}, anchor={addResult?.AnchorTag}, anchorFound={addResult?.AnchorFound}, placementMode={addResult?.PlacementMode}, parentNode={addResult?.ParentNodeName}, anchorSourceType={addResult?.AnchorSourceType}, anchorSourceName={addResult?.AnchorSourceName}, anchorSourcePath={addResult?.AnchorSourcePath}, anchorConfidence={addResult?.AnchorConfidence}, targetAnchorPosition=[{FormatVector(addResult?.TargetAnchorPosition)}], targetAnchorWorldPosition=[{FormatVector(addResult?.TargetAnchorWorldPosition)}], localPosition=[{FormatVector(addResult?.LocalPosition)}], localRotation=[{FormatVector(addResult?.LocalRotation)}], localScale=[{FormatVector(addResult?.LocalScale)}], modGroups={addResult?.ModGroupCount}, sceneMeshes={renderState?.SceneMeshCount}, modMeshes={addResult?.MeshCount}, boundsCenter=[{FormatVector(addResult?.BoundsCenter)}], boundsSize=[{FormatVector(addResult?.BoundsSize)}], modWorldCenter=[{FormatVector(addResult?.ModWorldCenter)}], modWorldDistanceToCamera={FormatScalar(addResult?.ModWorldDistanceToCamera)}, meshVisibleCount={addResult?.MeshVisibleCount}, meshFrustumCulledCount={addResult?.MeshFrustumCulledCount}, meshVertexCount={addResult?.MeshVertexCount}, minAxisSize={FormatScalar(addResult?.MinAxisSize)}, materialModes={FormatList(addResult?.MaterialModes)}");
 			Diagnostics.Add("info", $"Rendered mod: {item.DisplayName} ({item.BodyPartTag})");
 		}
 		catch (Exception ex)
@@ -342,10 +378,28 @@
 		public string? Reason { get; set; }
 		public string? AnchorTag { get; set; }
 		public bool AnchorFound { get; set; }
+		public string? PlacementMode { get; set; }
+		public string? ParentNodeName { get; set; }
+		public float[]? TargetAnchorPosition { get; set; }
+		public float[]? TargetAnchorWorldPosition { get; set; }
+		public string? AnchorSourceType { get; set; }
+		public string? AnchorSourceName { get; set; }
+		public string? AnchorSourcePath { get; set; }
+		public string? AnchorConfidence { get; set; }
+		public float[]? LocalPosition { get; set; }
+		public float[]? LocalRotation { get; set; }
+		public float[]? LocalScale { get; set; }
 		public int ModGroupCount { get; set; }
 		public int MeshCount { get; set; }
 		public float[]? BoundsCenter { get; set; }
 		public float[]? BoundsSize { get; set; }
+		public float[]? ModWorldCenter { get; set; }
+		public float? ModWorldDistanceToCamera { get; set; }
+		public int MeshVisibleCount { get; set; }
+		public int MeshFrustumCulledCount { get; set; }
+		public int MeshVertexCount { get; set; }
+		public float? MinAxisSize { get; set; }
+		public string[]? MaterialModes { get; set; }
 	}
 
 	private sealed class ModRenderState
@@ -356,6 +410,14 @@
 		public int AvatarMeshCount { get; set; }
 	}
 
+	private sealed class TransformToggleOptions
+	{
+		public bool ModelFlipX { get; set; }
+		public bool ModelFlipY { get; set; }
+		public bool TextureFlipX { get; set; }
+		public bool TextureFlipY { get; set; }
+	}
+
 	private static string FormatVector(float[]? value)
 	{
 		if (value is null || value.Length == 0)
@@ -364,6 +426,26 @@
 		}
 
 		return string.Join(", ", value.Select(component => component.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)));
+	}
+
+	private static string FormatScalar(float? value)
+	{
+		if (!value.HasValue)
+		{
+			return "n/a";
+		}
+
+		return value.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+	}
+
+	private static string FormatList(string[]? values)
+	{
+		if (values is null || values.Length == 0)
+		{
+			return "n/a";
+		}
+
+		return string.Join(" | ", values);
 	}
 
 	private void HandleDiagnosticsChanged()

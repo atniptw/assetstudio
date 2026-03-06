@@ -12,22 +12,13 @@ using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
 {
-    public class VersionPromptEventArgs : EventArgs
-    {
-        public string FileName { get; set; }
-        public string UserProvidedVersion { get; set; }
-        public bool Cancelled { get; set; }
-    }
-
     public class AssetsManager
     {
         public Game Game;
-        public event EventHandler<VersionPromptEventArgs> OnVersionPrompt;
         public bool Silent = false;
         public bool SkipProcess = false;
         public bool ResolveDependencies = false;
         public string SpecifyUnityVersion;
-        public string DefaultVersion; // Fallback version for stripped files
         private string detectedFolderVersion; // Version detected from globalgamemanagers or bundles
         public CancellationTokenSource tokenSource = new CancellationTokenSource();
         public List<SerializedFile> assetsFileList = new List<SerializedFile>();
@@ -831,71 +822,10 @@ namespace AssetStudio
             }
         }
 
-        // Lock for version prompting - ensures only one thread prompts user
-        private readonly object versionPromptLock = new object();
-        private bool versionPrompted = false;
-
         public void CheckStrippedVersion(SerializedFile assetsFile)
         {
             if (assetsFile.IsVersionStripped && string.IsNullOrEmpty(SpecifyUnityVersion))
             {
-                // Priority 1 & 3: Use detected folder version or DefaultVersion as fallback
-                string version;
-                lock (versionDetectionLock)
-                {
-                    version = detectedFolderVersion;
-                }
-
-                if (!string.IsNullOrEmpty(version))
-                {
-                    Logger.Info($"Using detected Unity version for {assetsFile.fileName}: {version}");
-                    assetsFile.SetVersion(version);
-                    return;
-                }
-                else if (!string.IsNullOrEmpty(DefaultVersion))
-                {
-                    Logger.Info($"Using default Unity version for {assetsFile.fileName}: {DefaultVersion}");
-                    assetsFile.SetVersion(DefaultVersion);
-                    return;
-                }
-
-                // Try to prompt user for version if event is subscribed (thread-safe)
-                if (OnVersionPrompt != null)
-                {
-                    lock (versionPromptLock)
-                    {
-                        // Check again if another thread already got the version
-                        if (!string.IsNullOrEmpty(SpecifyUnityVersion))
-                        {
-                            assetsFile.SetVersion(SpecifyUnityVersion);
-                            return;
-                        }
-
-                        // Only prompt once
-                        if (!versionPrompted)
-                        {
-                            versionPrompted = true;
-                            var eventArgs = new VersionPromptEventArgs
-                            {
-                                FileName = assetsFile.fileName
-                            };
-                            OnVersionPrompt(this, eventArgs);
-
-                            if (!eventArgs.Cancelled && !string.IsNullOrEmpty(eventArgs.UserProvidedVersion))
-                            {
-                                SpecifyUnityVersion = eventArgs.UserProvidedVersion;
-                                assetsFile.SetVersion(eventArgs.UserProvidedVersion);
-                                return;
-                            }
-                        }
-                        else if (!string.IsNullOrEmpty(SpecifyUnityVersion))
-                        {
-                            assetsFile.SetVersion(SpecifyUnityVersion);
-                            return;
-                        }
-                    }
-                }
-
                 throw new Exception("The Unity version has been stripped, please set the version in the options");
             }
             if (!string.IsNullOrEmpty(SpecifyUnityVersion))
@@ -924,7 +854,6 @@ namespace AssetStudio
             assetsFileIndexCache.Clear();
 
             // Reset parallel loading state
-            versionPrompted = false;
             detectedFolderVersion = null;
 
             tokenSource.Dispose();

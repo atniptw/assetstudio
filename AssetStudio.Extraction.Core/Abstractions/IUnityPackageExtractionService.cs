@@ -10,6 +10,7 @@ namespace AssetStudio.Extraction.Core.Abstractions
         Task<ExtractionSceneData> ExtractStaticAssetAsync(
             byte[] assetBytes,
             string sourceName,
+            string? bodyPartTag = null,
             Dictionary<string, byte[]>? companionFiles = null,
             IExtractionLogger? logger = null);
     }

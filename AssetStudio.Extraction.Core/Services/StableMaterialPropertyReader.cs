@@ -44,5 +44,25 @@ namespace AssetStudio.Extraction.Core.Services
 
             return fallback;
         }
+
+        public static bool TryGetFloat(Material? material, out float value, params string[] keys)
+        {
+            value = 0f;
+            if (material?.m_SavedProperties?.m_Floats == null || keys == null || keys.Length == 0)
+                return false;
+
+            foreach (var key in keys)
+            {
+                var floatEntry = material.m_SavedProperties.m_Floats
+                    .FirstOrDefault(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
+                if (string.IsNullOrWhiteSpace(floatEntry.Key))
+                    continue;
+
+                value = floatEntry.Value;
+                return true;
+            }
+
+            return false;
+        }
     }
 }

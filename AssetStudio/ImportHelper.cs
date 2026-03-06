@@ -106,17 +106,13 @@ namespace AssetStudio
             var packIdx = data.Search(PackSignature);
             if (packIdx == -1)
             {
-                Logger.Verbose($"Signature {PackSignature} was not found, aborting...");
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Expected signature {PackSignature} was not found in '{reader.FileName}'.");
             }
             Logger.Verbose($"Found signature {PackSignature} at offset 0x{packIdx:X8}");
             var mr0kIdx = data.Search("mr0k", packIdx);
             if (mr0kIdx == -1)
             {
-                Logger.Verbose("Signature mr0k was not found, aborting...");
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Expected signature mr0k was not found in '{reader.FileName}'.");
             }
             Logger.Verbose($"Found signature mr0k signature at offset 0x{mr0kIdx:X8}");
 
@@ -207,13 +203,15 @@ namespace AssetStudio
                     throw new InvalidOperationException($"Expected signature {PackSignature} or {UnityFSSignature}, got {signature} instead !!");
                 }
             }
-            catch (InvalidCastException)
+            catch (InvalidCastException ex)
             {
-                Logger.Error($"Game type mismatch, Expected {nameof(GameType.GI_Pack)} ({nameof(Mr0k)}) but got {game.Name} ({game.GetType().Name}) !!");
+                throw new InvalidOperationException(
+                    $"Game type mismatch for pack decryption: expected {nameof(GameType.GI_Pack)} ({nameof(Mr0k)}) but got {game.Name} ({game.GetType().Name}).",
+                    ex);
             }
             catch (Exception e)
             {
-                Logger.Error($"Error while reading pack file {reader.FullPath}", e);
+                throw new InvalidDataException($"Error while decrypting pack file '{reader.FullPath}'.", e);
             }
             finally
             {
@@ -232,9 +230,7 @@ namespace AssetStudio
             var signature = reader.ReadStringToNull(4);
             if (signature != "mark")
             {
-                Logger.Verbose($"Expected signature mark, found {signature} instead, aborting...");
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Expected signature mark, found '{signature}' in '{reader.FileName}'.");
             }
 
             const int BlockSize = 0xA00;
@@ -309,18 +305,22 @@ namespace AssetStudio
             var idx = data.Search("UnityFS");
             if (idx != -1)
             {
-                Logger.Verbose($"Found fake header at offset 0x{idx:X8}");
+                Logger.Verbose($"Found UnityFS marker at offset 0x{idx:X8}");
                 var idx2 = data[(idx + 1)..].Search("UnityFS");
                 if (idx2 != -1)
                 {
-                    Logger.Verbose($"Found real header at offset 0x{idx + idx2 + 1:X8}");
+                    Logger.Verbose($"Found second UnityFS marker at offset 0x{idx + idx2 + 1:X8}, using it as bundle start");
                     stream = new OffsetStream(stream, idx + idx2 + 1);
                 }
                 else
                 {
-                    Logger.Verbose("Real header was not found, assuming fake header is the real one");
+                    Logger.Verbose($"Only one UnityFS marker found, using offset 0x{idx:X8} as bundle start");
                     stream = new OffsetStream(stream, idx);
                 }
+            }
+            else
+            {
+                throw new InvalidDataException($"Failed to locate UnityFS header in fake-header stream '{reader.FileName}'.");
             }
 
             Logger.Verbose("Parsed fake header file successfully !!");
@@ -341,9 +341,7 @@ namespace AssetStudio
             var signature = reader.ReadStringToNull(HeadLength);
             if (string.Compare(signature, "K9999") > 0 || reader.Length <= MinLength)
             {
-                Logger.Verbose($"Signature version {signature} is higher than K9999 or stream length {reader.Length} is less than minimum length {MinLength}, aborting...");
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Unexpected Fantasy of Wind header '{signature}' or invalid stream length {reader.Length} in '{reader.FileName}'.");
             }
 
             reader.Position = reader.Length + ~StartEnd;
@@ -397,9 +395,7 @@ namespace AssetStudio
 
             if (signature != "SzxFS")
             {
-                Logger.Verbose($"Expected signature SzxFS, found {signature} instead, aborting...");
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Expected signature SzxFS, found '{signature}' in '{reader.FileName}'.");
             }
 
             var seed = reader.ReadInt32();
@@ -449,7 +445,7 @@ namespace AssetStudio
             var idx = data.Search("UnityFS");
             if (idx != -1)
             {
-                Logger.Verbose("Found UnityFS signature, file might not be encrypted");
+                Logger.Verbose("Found UnityFS signature, skipping Anchor Panic decryption");
                 return ParseFakeHeader(reader);
             }
 
@@ -563,9 +559,7 @@ namespace AssetStudio
             var signature = reader.ReadStringToNull(4);
             if (signature != "MJJ")
             {
-                Logger.Verbose($"Expected signature MJJ, found {signature} instead, aborting...");
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Expected signature MJJ, found '{signature}' in '{reader.FileName}'.");
             }
 
             reader.Endian = EndianType.BigEndian;
@@ -632,7 +626,7 @@ namespace AssetStudio
             var signature = Encoding.UTF8.GetString(signatureBytes[..7]);
             if (signature == "UnityFS")
             {
-                Logger.Verbose("Found UnityFS signature, file might not be encrypted");
+                Logger.Verbose("Found UnityFS signature, skipping Imaginary Fest decryption");
                 reader.Position = 0;
                 return reader;
             }
@@ -697,8 +691,7 @@ namespace AssetStudio
             }
 
             Logger.Verbose("File doesn't match any of the encryption types");
-            reader.Position = 0;
-            return reader;
+            throw new InvalidDataException($"Imaginary Fest decryption failed for '{reader.FileName}': no known encryption pattern matched.");
 
             int GetLoadAssetBundleOffset(string str)
             {
@@ -806,8 +799,7 @@ namespace AssetStudio
             if (version != 0x10 && version != 0x20)
             {
                 reader.Endian = EndianType.BigEndian;
-                reader.Position = 0;
-                return reader;
+                throw new InvalidDataException($"Unsupported Project Sekai bundle version 0x{version:X8} in '{reader.FileName}'.");
             }
 
             MemoryStream ms = new();
@@ -848,8 +840,7 @@ namespace AssetStudio
             var signature = Encoding.UTF8.GetString(signatureBytes[..7]);
             if (signature != "UnityFS")
             {
-                Logger.Verbose($"Unknown signature, exepcted UnityFS but got {signature} instead !!");
-                return reader;
+                throw new InvalidDataException($"Expected UnityFS signature after Codename Jump decryption, found '{signature}' in '{reader.FileName}'.");
             }
 
             var data = reader.ReadBytes((int)reader.Remaining);
@@ -902,7 +893,7 @@ namespace AssetStudio
             var signature = Encoding.UTF8.GetString(signatureBytes[..7]);
             if (signature == "UnityFS")
             {
-                Logger.Verbose("Found UnityFS signature, file might not be encrypted");
+                Logger.Verbose("Found UnityFS signature, skipping Reverse: 1999 decryption");
                 reader.Position = 0;
                 return reader;
             }
@@ -932,8 +923,7 @@ namespace AssetStudio
             }
 
             Logger.Verbose("File doesn't match any of the encryption types");
-            reader.Position = 0;
-            return reader;
+            throw new InvalidDataException($"Reverse: 1999 decryption failed for '{reader.FileName}': no known encryption pattern matched.");
 
             static byte GetAbEncryptKey(string md5Name)
             {
