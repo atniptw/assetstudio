@@ -3,9 +3,9 @@
 ## Purpose
 Use this skill to verify what to check on the ModViewer app page, especially launch-time behavior and troubleshooting signals.
 
-This skill does **not** teach Playwright CLI mechanics.
+This skill does **not** define integrated-browser run mechanics.
 
-Use `.github/skills/playwright/SKILL.md` to run browser commands.
+Use `.github/skills/integrated-browser-modviewer/SKILL.md` for run and evidence capture workflow.
 
 ## Scope
 Focused on app-page validation for:

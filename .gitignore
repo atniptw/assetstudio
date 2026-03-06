@@ -359,10 +359,5 @@ yarn-error.log*
 /AssetStudio.ModViewer/publish/
 /AssetStudio.ModViewer/wwwroot/dist/
 
-# Playwright CLI runtime artifacts
-.playwright/
-.playwright-cli/
-playwright-report/
-
 # Unitypackage temporary backups
 *.unitypackage.bak-*

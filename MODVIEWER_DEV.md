@@ -89,11 +89,11 @@ Open `https://localhost:5001` in browser.
 
 ### Browser Automation Skills
 
-- Playwright command usage: [.github/skills/playwright/SKILL.md](.github/skills/playwright/SKILL.md)
+- Integrated browser workflow: [.github/skills/integrated-browser-modviewer/SKILL.md](.github/skills/integrated-browser-modviewer/SKILL.md)
 - ModViewer page verification checklist: [.github/skills/modviewer-page-checks/SKILL.md](.github/skills/modviewer-page-checks/SKILL.md)
 
 Use both skills together:
-1. Use the Playwright skill to open the app and capture screenshot/console/network artifacts.
+1. Use the integrated-browser skill to open the app and collect validation evidence.
 2. Use the ModViewer page-checks skill to decide pass/fail from diagnostics, status, and troubleshooting signals.
 
 ### Unit Tests

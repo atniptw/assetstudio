@@ -144,11 +144,11 @@ Example: `git tag v2.4.0 && git push origin v2.4.0`
 
 When validating ModViewer in-browser behavior, use these skills in order:
 
-1. **Playwright mechanics only**: [.github/skills/playwright/SKILL.md](.github/skills/playwright/SKILL.md)
+1. **Integrated browser workflow**: [.github/skills/integrated-browser-modviewer/SKILL.md](.github/skills/integrated-browser-modviewer/SKILL.md)
 2. **ModViewer page assertions/checklist**: [.github/skills/modviewer-page-checks/SKILL.md](.github/skills/modviewer-page-checks/SKILL.md)
 
 Keep responsibilities separated:
-- Playwright skill: how to run browser automation commands and collect artifacts
+- Integrated browser skill: how to run ModViewer and collect validation evidence in VS Code
 - ModViewer checks skill: what to verify on page (console health, diagnostics, status, troubleshooting sections)
 
 **External Dependencies**:
